@@ -1,0 +1,44 @@
+# Example 01: Ligand Filtering
+#
+# The simplest possible pipeline — a single method that filters a library
+# of molecules by drug-likeness properties (Lipinski's Rule of Five).
+#
+# Run a dry-run validation with:
+#   python scripts/validate_config.py examples/pipelines/01_ligand_filtering.yaml --build
+
+name: ligand_filtering
+description: Filter a molecule library by drug-likeness properties
+version: 1.0.0
+failure_policy: stop
+
+inputs:
+  ligands:
+    type: molecule.collection
+    format: sdf
+    source: ../../tests/fixtures/sample_data/ligands.sdf
+
+methods:
+  - id: filter
+    type: ligand_filter
+    description: Apply Lipinski's Rule of Five
+    inputs:
+      ligands: pipeline.ligands
+    config:
+      mw_max: 500
+      logp_max: 5
+      hba_max: 10
+      hbd_max: 5
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 30m
+
+# No connections needed for a single-method pipeline.
+
+environment:
+  variables:
+    LIBRARY_NAME: screening_library
+
+outputs:
+  filtered_ligands: filter.filtered_ligands
+  statistics: filter.statistics

@@ -1,0 +1,51 @@
+{
+  "status": "completed",
+  "prediction_dir": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input",
+  "structures": [
+    "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/boltz2_input_model_0.pdb"
+  ],
+  "confidence": [
+    "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/confidence_boltz2_input_model_0.json"
+  ],
+  "affinity": [],
+  "arrays": [
+    "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/pae_boltz2_input_model_0.npz",
+    "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/pde_boltz2_input_model_0.npz",
+    "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/plddt_boltz2_input_model_0.npz"
+  ],
+  "stdout": "Running on CPU, this will be slow. Consider using a GPU.\nChecking input data.\nAll inputs are already processed.\nProcessing 0 inputs with 0 threads.\nFound some existing predictions (1), skipping and running only the missing ones, if any. If you wish to override these existing predictions, please set the --override flag.\n",
+  "stderr": "\n0it [00:00, ?it/s]\n0it [00:00, ?it/s]\nUsing bfloat16 Automatic Mixed Precision (AMP)\n/home/pacayang/Applications/miniconda3/envs/boltz2/lib/python3.12/site-packages/torch/cuda/__init__.py:789: UserWarning: Can't initialize NVML\n  warnings.warn(\"Can't initialize NVML\")\nGPU available: False, used: False\nTPU available: False, using: 0 TPU cores\nHPU available: False, using: 0 HPUs\n/home/pacayang/Applications/miniconda3/envs/boltz2/lib/python3.12/site-packages/pytorch_lightning/trainer/connectors/logger_connector/logger_connector.py:76: Starting from v1.9.0, `tensorboardX` has been removed as a dependency of the `pytorch_lightning` package, due to potential conflicts with other packages in the ML ecosystem. For this reason, `logger=True` will use `CSVLogger` as the default logger, unless the `tensorboard` or `tensorboardX` packages are found. Please `pip install lightning[extra]` or one of them to enable TensorBoard support by default\n",
+  "docking_receptor": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/outputs/vina_receptor.pdb",
+  "docking_box": {
+    "center": [
+      1.9755000000000003,
+      2.253,
+      -3.387
+    ],
+    "size": [
+      47.811,
+      31.218,
+      28.27
+    ]
+  },
+  "docking_box_padding": 8.0,
+  "selected_structure": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output/boltz_results_boltz2_input/predictions/boltz2_input/boltz2_input_model_0.pdb",
+  "selected_confidence": 0.8724411725997925,
+  "selection_fallback": false,
+  "ligand_chain_ids": [
+    "B",
+    "C"
+  ],
+  "ligand_bounds": {
+    "min": [
+      -13.93,
+      -5.356,
+      -9.522
+    ],
+    "max": [
+      17.881,
+      9.862,
+      2.748
+    ]
+  }
+}

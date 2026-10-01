@@ -1,0 +1,54 @@
+# Example 02: Similarity Screening
+#
+# Filter a library, then run a fingerprint similarity search against a set of
+# query molecules. Demonstrates a two-step serial pipeline.
+
+name: similarity_screening
+description: Filter then search for molecules similar to known actives
+version: 1.0.0
+failure_policy: stop
+
+inputs:
+  ligands:
+    type: molecule.collection
+    format: sdf
+    source: ../../tests/fixtures/sample_data/ligands.sdf
+
+methods:
+  - id: filter
+    type: ligand_filter
+    description: Remove molecules outside drug-like property ranges
+    inputs:
+      ligands: pipeline.ligands
+    config:
+      mw_max: 550
+      logp_max: 5
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 20m
+
+  - id: similarity
+    type: similarity_search
+    description: Tanimoto similarity search using Morgan fingerprints
+    inputs:
+      queries: pipeline.ligands
+      database: filter.filtered_ligands
+    config:
+      fingerprint_type: morgan
+      radius: 2
+      similarity_threshold: 0.7
+      max_results: 200
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 2h
+
+connections:
+  - from: filter
+    to: similarity
+    type: serial
+
+outputs:
+  similar_molecules: similarity.similar_molecules
+  similarity_scores: similarity.similarity_scores

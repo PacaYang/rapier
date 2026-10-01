@@ -1,0 +1,39 @@
+{
+  "box": {
+    "center": [
+      1.9755000000000003,
+      2.253,
+      -3.387
+    ],
+    "size": [
+      47.811,
+      31.218,
+      28.27
+    ]
+  },
+  "config": {
+    "allow_partial_failures": true,
+    "box_center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "box_size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "cpu": 4,
+    "energy_range": 3,
+    "exhaustiveness": 1,
+    "min_rmsd": null,
+    "num_modes": 3,
+    "scoring": "vina",
+    "seed": 2026,
+    "verbosity": 1
+  },
+  "ligands": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/prepare_ligands/outputs/prepared_ligands.sdf",
+  "manifest_version": 1,
+  "receptor": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/outputs/vina_receptor.pdb",
+  "work_dir": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock"
+}

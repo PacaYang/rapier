@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rapier · Workflow Builder</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="toolbar" role="toolbar" aria-label="Pipeline actions">
+    <h1>Rapier <span>workflow builder</span></h1>
+    <input id="pipeline-name" aria-label="Pipeline name" spellcheck="false">
+    <div class="spacer"></div>
+    <button id="btn-new" type="button">New</button>
+    <label class="select-wrap">Example
+      <select id="sel-example" aria-label="Load example pipeline"><option value="">Load…</option></select>
+    </label>
+    <button id="btn-import" type="button">Import YAML</button>
+    <input id="file-import" type="file" accept=".yaml,.yml" hidden>
+    <button id="btn-layout" type="button">Auto-layout</button>
+    <button id="btn-fit" type="button">Fit view</button>
+    <button id="btn-validate" type="button">Validate</button>
+    <button id="btn-export" type="button" class="primary">Export YAML</button>
+  </header>
+
+  <div class="layout">
+    <aside id="palette" aria-label="Method palette">
+      <input id="palette-search" type="search" placeholder="Search methods…" aria-label="Search methods">
+      <div id="palette-groups"></div>
+      <p class="hint">Drag onto the canvas, or press Enter to add.</p>
+    </aside>
+
+    <main id="viewport" aria-label="Pipeline canvas" tabindex="-1">
+      <div id="world">
+        <svg id="edges" aria-hidden="true"></svg>
+        <div id="nodes"></div>
+      </div>
+      <div id="zoom-indicator" aria-live="polite"></div>
+      <div id="empty-hint" hidden>Drag methods from the left to start building.</div>
+    </main>
+
+    <aside id="inspector" aria-label="Inspector"></aside>
+  </div>
+
+  <footer id="problems" aria-live="polite">
+    <button id="problems-toggle" type="button" aria-expanded="false"></button>
+    <ul id="problems-list" hidden></ul>
+  </footer>
+
+  <dialog id="export-dialog" aria-labelledby="export-title">
+    <h2 id="export-title">Pipeline YAML</h2>
+    <textarea id="export-text" readonly spellcheck="false" aria-label="Exported pipeline YAML"></textarea>
+    <div class="dialog-actions">
+      <button id="btn-copy" type="button">Copy</button>
+      <button id="btn-download" type="button" class="primary">Download</button>
+      <button id="btn-close-export" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

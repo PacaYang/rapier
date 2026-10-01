@@ -1,0 +1,137 @@
+# Multi-Step Method Example
+#
+# This example demonstrates a method with multiple internal steps.
+# Vina docking requires both preparation and docking steps.
+#
+# Use case: Complete Vina workflow with receptor and ligand preparation
+
+name: vina_complete_workflow
+description: Complete AutoDock Vina workflow with preparation steps
+version: 1.0.0
+
+failure_policy: stop
+
+methods:
+  # Step 1: Prepare receptor
+  - id: receptor_prep
+    type: receptor_preparation
+    description: Prepare receptor for docking (add hydrogens, charges)
+    config:
+      input_pdb: ${PROJECT_DIR}/data/receptor.pdb
+      output_pdbqt: ${PROJECT_DIR}/prepared/receptor.pdbqt
+      pH: 7.4
+      add_hydrogens: true
+      compute_charges: true
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 30m
+    failure_policy: stop
+
+  # Step 2: Prepare ligands
+  - id: ligand_prep
+    type: ligand_preparation
+    description: Prepare ligands for docking (generate 3D, add hydrogens)
+    config:
+      input_file: ${PROJECT_DIR}/data/ligands.sdf
+      output_dir: ${PROJECT_DIR}/prepared/ligands/
+      generate_3d: true
+      add_hydrogens: true
+      compute_charges: gasteiger
+      energy_minimize: true
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 1h
+    failure_policy: stop
+
+  # Step 3: Define binding box
+  - id: box_definition
+    type: binding_box
+    description: Define or auto-detect binding box
+    config:
+      method: auto_detect  # or 'manual'
+      reference_ligand: ${PROJECT_DIR}/data/cocrystal_ligand.pdb
+      padding: 5.0  # Angstroms
+      # Manual specification (used if method='manual'):
+      # center: [10.0, 15.0, 20.0]
+      # size: [20.0, 20.0, 20.0]
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 10m
+    failure_policy: stop
+
+  # Step 4: Vina docking (multi-step internally)
+  - id: vina_dock
+    type: vina_dock
+    description: AutoDock Vina molecular docking
+    config:
+      receptor: ${PROJECT_DIR}/prepared/receptor.pdbqt
+      ligand_dir: ${PROJECT_DIR}/prepared/ligands/
+      box_file: ${PROJECT_DIR}/prepared/binding_box.json
+      exhaustiveness: 16
+      num_modes: 20
+      energy_range: 3.0
+      output_dir: ${PROJECT_DIR}/results/docking/
+      # Multi-step configuration
+      steps:
+        - name: grid_generation
+          description: Generate affinity grids
+        - name: docking
+          description: Run molecular docking
+        - name: pose_extraction
+          description: Extract and score poses
+    resources:
+      cpus: 16
+      memory: 16GB
+      gpus: 0
+      time_limit: 6h
+      partition: compute
+    failure_policy: stop
+    retry_count: 2  # Retry up to 2 times if it fails
+
+  # Step 5: Analyze results
+  - id: analysis
+    type: docking_analysis
+    description: Analyze docking results and generate report
+    config:
+      docking_results: ${PROJECT_DIR}/results/docking/
+      output_report: ${PROJECT_DIR}/results/analysis_report.html
+      top_n: 100
+      cluster_rmsd: 2.0
+      generate_plots: true
+      plot_types:
+        - score_distribution
+        - rmsd_heatmap
+        - interaction_fingerprint
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 1h
+    failure_policy: continue
+
+# Connections: Serial workflow
+connections:
+  - from: receptor_prep
+    to: box_definition
+    type: serial
+
+  - from: ligand_prep
+    to: vina_dock
+    type: serial
+
+  - from: box_definition
+    to: vina_dock
+    type: serial
+
+  - from: vina_dock
+    to: analysis
+    type: serial
+
+# Environment settings
+environment:
+  variables:
+    VINA_PATH: /opt/vina/bin/vina
+    OBABEL_PATH: /usr/bin/obabel
+    MGLTools_PATH: /opt/mgltools/bin

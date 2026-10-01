@@ -1,0 +1,128 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --output={{ stdout_path }}
+#SBATCH --error={{ stderr_path }}
+{%- if partition %}
+#SBATCH --partition={{ partition }}
+{%- endif %}
+{%- if cpus %}
+#SBATCH --cpus-per-task={{ cpus }}
+{%- endif %}
+{%- if memory_mb %}
+#SBATCH --mem={{ memory_mb }}M
+{%- endif %}
+{%- if time_limit %}
+#SBATCH --time={{ time_limit }}
+{%- endif %}
+{%- if gpus and gpus > 0 %}
+#SBATCH --gres=gpu:{{ gpu_type if gpu_type else '' }}{{ gpus }}
+{%- endif %}
+{%- if dependency_string %}
+#SBATCH --dependency={{ dependency_string }}
+{%- endif %}
+{%- if array_spec %}
+#SBATCH --array={{ array_spec }}
+{%- endif %}
+{%- if account %}
+#SBATCH --account={{ account }}
+{%- endif %}
+{%- if qos %}
+#SBATCH --qos={{ qos }}
+{%- endif %}
+
+# ============================================================================
+# Job Information
+# ============================================================================
+echo "Job ID: $SLURM_JOB_ID"
+echo "Job Name: $SLURM_JOB_NAME"
+echo "Node: $SLURM_NODELIST"
+echo "Start Time: $(date)"
+echo "Working Directory: $(pwd)"
+{%- if array_spec %}
+echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
+{%- endif %}
+echo "============================================================================"
+
+# ============================================================================
+# Environment Setup
+# ============================================================================
+{%- if modules %}
+# Load required modules
+{%- for module in modules %}
+module load {{ module }}
+{%- endfor %}
+{%- endif %}
+
+{%- if conda_env %}
+# Activate conda environment
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate {{ conda_env }}
+{%- endif %}
+
+{%- if virtualenv %}
+# Activate virtual environment
+source {{ virtualenv }}/bin/activate
+{%- endif %}
+
+{%- if env_vars %}
+# Set environment variables
+{%- for key, value in env_vars.items() %}
+export {{ key }}="{{ value }}"
+{%- endfor %}
+{%- endif %}
+
+# Change to working directory
+{%- if work_dir %}
+cd {{ work_dir }}
+{%- endif %}
+
+# ============================================================================
+# Pre-execution Setup
+# ============================================================================
+{%- if pre_commands %}
+{%- for cmd in pre_commands %}
+{{ cmd }}
+{%- endfor %}
+{%- endif %}
+
+# ============================================================================
+# Main Command Execution
+# ============================================================================
+echo ""
+echo "Executing main command..."
+echo "============================================================================"
+
+# Set error handling
+set -e  # Exit on error
+set -u  # Exit on undefined variable
+set -o pipefail  # Exit on pipe failure
+
+# Execute command
+{{ command }}
+
+EXIT_CODE=$?
+
+# ============================================================================
+# Post-execution Cleanup
+# ============================================================================
+{%- if post_commands %}
+echo ""
+echo "Running post-execution commands..."
+{%- for cmd in post_commands %}
+{{ cmd }}
+{%- endfor %}
+{%- endif %}
+
+# ============================================================================
+# Job Summary
+# ============================================================================
+echo ""
+echo "============================================================================"
+echo "End Time: $(date)"
+echo "Exit Code: $EXIT_CODE"
+{%- if array_spec %}
+echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
+{%- endif %}
+echo "============================================================================"
+
+exit $EXIT_CODE

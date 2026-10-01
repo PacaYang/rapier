@@ -1,0 +1,42 @@
+# Example 06: Boltz-2 complex and affinity prediction
+
+name: boltz2_prediction
+description: Predict a protein-ligand complex and binding affinity with Boltz-2
+version: 1.0.0
+
+inputs:
+  protein:
+    type: sequence.protein
+    format: inline
+    value: MKTAYIAKQRQISFVKSHFSRQ
+    metadata:
+      chain_id: A
+  ligand:
+    type: molecule
+    format: smiles
+    value: CCO
+    metadata:
+      chain_id: B
+
+methods:
+  - id: predict
+    type: boltz2
+    inputs:
+      proteins: pipeline.protein
+      ligands: pipeline.ligand
+    config:
+      accelerator: gpu
+      use_msa_server: true
+      affinity_binder: B
+      diffusion_samples: 2
+      output_format: mmcif
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 32GB
+      time_limit: 12h
+
+outputs:
+  predicted_structures: predict.predicted_structures
+  confidence_scores: predict.confidence_scores
+  affinity_scores: predict.affinity_scores

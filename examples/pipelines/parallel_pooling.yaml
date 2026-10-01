@@ -1,0 +1,103 @@
+# Parallel Pipeline with Pooling Example
+#
+# This example demonstrates parallel execution with result pooling:
+# [A, D] -> Pooling -> C
+#
+# Use case: Run multiple docking methods in parallel, then pool results
+# and continue with consensus scoring
+
+name: parallel_pooling_screening
+description: Parallel docking with consensus pooling
+version: 1.0.0
+
+# Global settings
+failure_policy: continue  # Continue even if one parallel branch fails
+
+# Method definitions
+methods:
+  # Parallel Method 1: Vina docking
+  - id: vina_docking
+    type: vina_dock
+    description: AutoDock Vina molecular docking
+    config:
+      receptor: ${PROJECT_DIR}/data/receptor.pdbqt
+      box_center: [10.0, 15.0, 20.0]
+      box_size: [20.0, 20.0, 20.0]
+      exhaustiveness: 8
+      num_modes: 10
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 3h
+      partition: standard
+    failure_policy: continue
+
+  # Parallel Method 2: SMINA docking
+  - id: smina_docking
+    type: smina_dock
+    description: SMINA molecular docking with custom scoring
+    config:
+      receptor: ${PROJECT_DIR}/data/receptor.pdbqt
+      box_center: [10.0, 15.0, 20.0]
+      box_size: [20.0, 20.0, 20.0]
+      exhaustiveness: 8
+      scoring: vinardo
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 3h
+      partition: standard
+    failure_policy: continue
+
+  # Pooling method: Consensus filtering
+  - id: consensus_pool
+    type: consensus_filter
+    description: Pool results from multiple docking methods
+    config:
+      min_methods: 1  # Accept if at least 1 method succeeded
+      score_weights:
+        vina_docking: 1.0
+        smina_docking: 1.0
+    resources:
+      cpus: 4
+      memory: 4GB
+      time_limit: 30m
+    failure_policy: stop
+
+  # Final scoring method
+  - id: final_scoring
+    type: rescoring
+    description: Rescore pooled results with more accurate method
+    config:
+      score_function: mm_gbsa
+      top_n: 50
+    resources:
+      cpus: 16
+      memory: 16GB
+      time_limit: 4h
+    failure_policy: stop
+
+# Connections: Define parallel execution
+connections:
+  # Both docking methods feed into pooling (parallel execution)
+  - from: [vina_docking, smina_docking]
+    to: consensus_pool
+    type: parallel
+
+  # Pooling feeds into final scoring (serial)
+  - from: consensus_pool
+    to: final_scoring
+    type: serial
+
+# Pooling rules: Define how to combine results from parallel branches
+pooling_rules:
+  consensus_pool:
+    strategy: best
+    metric: consensus_score
+    minimize: false  # Higher score is better
+
+# Environment settings
+environment:
+  variables:
+    TARGET_NAME: kinase_receptor
+    OUTPUT_FORMAT: sdf

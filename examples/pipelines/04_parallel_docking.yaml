@@ -1,0 +1,74 @@
+# Example 04: Parallel Docking with Pooling
+#
+# Runs Vina and Smina docking in parallel on the same prepared ligands, then
+# pools the results (keeping the best-scoring pose per ligand) before a final
+# filter. This matches the [A, B] -> Pool -> C topology.
+
+name: parallel_docking
+description: Consensus docking with Vina and Smina, pooled by best score
+version: 1.0.0
+failure_policy: continue
+
+methods:
+  - id: prep
+    type: ligand_prep
+    description: Prepare ligands for both docking engines
+    config:
+      ph: 7.4
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 1h
+
+  - id: vina
+    type: vina_docking
+    description: AutoDock Vina branch
+    config:
+      box_center: [10.0, 15.0, 20.0]
+      box_size: [20.0, 20.0, 20.0]
+      exhaustiveness: 8
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 4h
+    failure_policy: continue
+
+  - id: smina
+    type: smina_docking
+    description: Smina branch with Vinardo scoring
+    config:
+      box_center: [10.0, 15.0, 20.0]
+      box_size: [20.0, 20.0, 20.0]
+      scoring: vinardo
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 4h
+    failure_policy: continue
+
+  - id: consensus
+    type: ligand_filter
+    description: Pool docking results and keep the best poses
+    config:
+      mw_max: 500
+    resources:
+      cpus: 4
+      memory: 4GB
+      time_limit: 30m
+
+connections:
+  - from: prep
+    to: vina
+    type: serial
+  - from: prep
+    to: smina
+    type: serial
+  - from: [vina, smina]
+    to: consensus
+    type: parallel
+
+pooling_rules:
+  consensus:
+    strategy: best
+    metric: docking_score
+    minimize: true   # lower (more negative) affinity is better

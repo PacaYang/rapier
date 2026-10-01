@@ -1,0 +1,44 @@
+# Simple serial pipeline fixture for tests: A -> B -> C
+name: simple_test_pipeline
+description: Serial pipeline used in tests
+version: 1.0.0
+failure_policy: stop
+
+methods:
+  - id: filter_step
+    type: ligand_filter
+    description: Filter ligands by properties
+    parameters:
+      mw_max: 500
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 30m
+
+  - id: dock_step
+    type: vina_docking
+    description: Dock filtered ligands
+    parameters:
+      exhaustiveness: 8
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 2h
+
+  - id: score_step
+    type: ligand_filter
+    description: Final scoring/filter
+    parameters:
+      mw_max: 450
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 15m
+
+connections:
+  - from: filter_step
+    to: dock_step
+    type: serial
+  - from: dock_step
+    to: score_step
+    type: serial

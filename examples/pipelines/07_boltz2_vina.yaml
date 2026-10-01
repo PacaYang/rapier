@@ -1,0 +1,98 @@
+# Example 07: Boltz-2 structure prediction followed by AutoDock Vina docking
+#
+# Boltz-2 predicts a complex for the protein and both ligands. Rapier selects
+# the highest-confidence structure, removes ligand chains to create a receptor,
+# and derives one shared Vina box from the two predicted ligand positions.
+
+name: boltz2_vina_docking
+description: Predict a binding site with Boltz-2, then dock two ligands with AutoDock Vina
+version: 1.0.0
+failure_policy: stop
+
+inputs:
+  protein:
+    type: sequence.protein
+    format: inline
+    value: LPALKLALEYIVPCMNKHGICVVDDFLGKETGQQIGDEVRALHDTGKFTDGQLVSQKSDSSKDIRGDKITWIEGKEPGCETIGLLMSSMDDLIRHCNGKLGSYKINGRTKAMVACYPGNGTGYVRHVDNPNGDGRCVTCIYYLNKDWDAKVSGGILRIFPEGKAQFADIEPKFDRLLFFWSDRRNPHEVQPAYATRYAITVWYFDADERARAKVKY
+    metadata:
+      chain_id: A
+  ligands:
+    type: molecule.collection
+    format: smiles
+    value:
+      - O=c1c2cc(OCc3ccccc3)ccc2nc2n1CCCCC2 ligand_1
+      - O=c1n2CCCCCc2nc2ccc(OCCCc3ccccc3)cc12 ligand_2
+    metadata:
+      chain_id: [B, C]
+
+methods:
+  - id: predict
+    type: boltz2
+    description: Predict the protein-ligand complex and derive Vina inputs
+    inputs:
+      proteins: pipeline.protein
+      ligands: pipeline.ligands
+    config:
+      accelerator: gpu
+      devices: 1
+      use_msa_server: true
+      diffusion_samples: 1
+      recycling_steps: 1
+      sampling_steps: 50
+      output_format: mmcif
+      emit_docking_inputs: true
+      docking_box_padding: 8.0
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 32GB
+      time_limit: 12h
+
+  - id: prepare_ligands
+    type: ligand_prep
+    description: Generate deterministic 3D conformers for Vina after Boltz completes
+    inputs:
+      ligands: pipeline.ligands
+    config:
+      ph: 7.4
+      num_conformers: 1
+      energy_minimize: true
+      force_field: MMFF
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 1h
+
+  - id: dock
+    type: vina_docking
+    description: Dock both ligands into the Boltz-predicted shared binding region
+    inputs:
+      receptor: predict.vina_receptor
+      ligands: prepare_ligands.prepared_ligands
+      binding_site: predict.docking_box
+    config:
+      exhaustiveness: 1
+      num_modes: 3
+      energy_range: 3
+      scoring: vina
+      seed: 2026
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 2h
+
+connections:
+  - from: predict
+    to: prepare_ligands
+    type: serial
+  - from: prepare_ligands
+    to: dock
+    type: serial
+
+outputs:
+  predicted_structures: predict.predicted_structures
+  confidence_scores: predict.confidence_scores
+  vina_receptor: predict.vina_receptor
+  docking_box: predict.docking_box
+  docked_poses: dock.docked_poses
+  docking_scores: dock.docking_scores

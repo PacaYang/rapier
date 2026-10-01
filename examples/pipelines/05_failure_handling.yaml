@@ -1,0 +1,55 @@
+# Example 05: Failure Handling
+#
+# Demonstrates per-method failure policies. The optional docking branch is
+# allowed to fail (continue policy) without halting the pipeline, while the
+# core filtering steps use the default stop policy.
+
+name: failure_handling_demo
+description: Mixed failure policies across a pipeline
+version: 1.0.0
+failure_policy: stop
+
+methods:
+  - id: filter
+    type: ligand_filter
+    description: Initial filter (critical — stop on failure)
+    config:
+      mw_max: 500
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 20m
+    failure_policy: stop
+
+  - id: optional_dock
+    type: vina_docking
+    description: Optional docking — allowed to fail and be skipped
+    config:
+      box_center: [0.0, 0.0, 0.0]
+      box_size: [20.0, 20.0, 20.0]
+      exhaustiveness: 8
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 2h
+    failure_policy: continue
+
+  - id: retryable_score
+    type: ligand_filter
+    description: Scoring step that retries on transient failures
+    config:
+      mw_max: 450
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 30m
+    failure_policy: retry
+    retry_count: 3
+
+connections:
+  - from: filter
+    to: optional_dock
+    type: serial
+  - from: optional_dock
+    to: retryable_score
+    type: serial

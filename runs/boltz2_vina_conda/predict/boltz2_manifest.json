@@ -1,0 +1,52 @@
+{
+  "config": {
+    "accelerator": "cpu",
+    "affinity_binder": null,
+    "affinity_checkpoint": null,
+    "affinity_mw_correction": false,
+    "cache": null,
+    "checkpoint": null,
+    "constraints": null,
+    "devices": 1,
+    "diffusion_samples": 1,
+    "diffusion_samples_affinity": 5,
+    "docking_box_padding": 8.0,
+    "emit_docking_inputs": true,
+    "max_msa_seqs": 8192,
+    "max_parallel_samples": 5,
+    "method": null,
+    "msa_pairing_strategy": "greedy",
+    "msa_server_url": "https://api.colabfold.com",
+    "no_kernels": true,
+    "num_subsampled_msa": 1024,
+    "num_workers": 1,
+    "output_format": "pdb",
+    "override": true,
+    "preprocessing_threads": 1,
+    "properties": null,
+    "recycling_steps": 1,
+    "sampling_steps": 20,
+    "sampling_steps_affinity": 200,
+    "single_sequence_mode": false,
+    "step_scale": 1.5,
+    "subsample_msa": false,
+    "use_msa_server": true,
+    "use_potentials": false,
+    "write_full_pae": false,
+    "write_full_pde": false
+  },
+  "entity_mapping": {
+    "ligand_ids": [
+      "B",
+      "C"
+    ],
+    "polymer_ids": [
+      "A"
+    ]
+  },
+  "input_yaml": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_input.yaml",
+  "manifest_version": 1,
+  "output_dir": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict/boltz2_output",
+  "sample_name": "boltz2_input",
+  "work_dir": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/predict"
+}

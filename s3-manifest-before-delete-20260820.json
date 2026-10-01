@@ -1,0 +1,479 @@
+{
+    "Contents": [
+        {
+            "Key": "customers/7OtB5Qm08EDQU_n6ayHXhD55X40/photos/day1/1785358420568-653491ee.png",
+            "LastModified": "2026-07-29T20:53:41+00:00",
+            "ETag": "\"56d64ecde465a056af3e003f26779106\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1838003,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/7OtB5Qm08EDQU_n6ayHXhD55X40/photos/day1/1785358895503-6e878c17.png",
+            "LastModified": "2026-07-29T21:01:36+00:00",
+            "ETag": "\"068ea6431d1875bc376bafab32781bc1\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 54964,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/7OtB5Qm08EDQU_n6ayHXhD55X40/profile.json",
+            "LastModified": "2026-07-29T22:13:32+00:00",
+            "ETag": "\"f899683967f015af542a3a92a7bf2583\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 258,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YLlmJPdpDMGEf29h9ErSIbqHDsQ/photos/day1/crown/1785528449527-49a50ba0.png",
+            "LastModified": "2026-07-31T20:07:30+00:00",
+            "ETag": "\"068ea6431d1875bc376bafab32781bc1\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 54964,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YLlmJPdpDMGEf29h9ErSIbqHDsQ/photos/day1/left/1785528446547-569dde94.png",
+            "LastModified": "2026-07-31T20:07:27+00:00",
+            "ETag": "\"dd57962463f108d74086d13459f25a80\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 178501,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YLlmJPdpDMGEf29h9ErSIbqHDsQ/photos/day1/part-line/1785528435252-659a01bc.png",
+            "LastModified": "2026-07-31T20:07:16+00:00",
+            "ETag": "\"b16fe4bf969963e927c30ed8ef9b9579\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 155845,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YLlmJPdpDMGEf29h9ErSIbqHDsQ/photos/day1/right/1785528442890-80397b97.png",
+            "LastModified": "2026-07-31T20:07:24+00:00",
+            "ETag": "\"191f0688a18ed3cec3129814d1d49bed\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 503664,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YLlmJPdpDMGEf29h9ErSIbqHDsQ/profile.json",
+            "LastModified": "2026-07-31T20:07:10+00:00",
+            "ETag": "\"f1eb62f3f65b245516d3a6478f5cc376\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 180,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YguvwzxizCTqpe_krTo8_Cul648/photos/day1/part-line/1785526948256-1d9c5a8a.jpg",
+            "LastModified": "2026-07-31T19:42:29+00:00",
+            "ETag": "\"7b27b5d93fd927b34f96c39d08ea0f27\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 501373,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/YguvwzxizCTqpe_krTo8_Cul648/profile.json",
+            "LastModified": "2026-07-31T19:38:41+00:00",
+            "ETag": "\"408994db002fc7007ab9e5eca4596617\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 183,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/b8ao9hbZV8bu2PYT-eaVu4CckDs/photos/day1/part-line/1785526795428-2e09591b.heic",
+            "LastModified": "2026-07-31T19:39:56+00:00",
+            "ETag": "\"9ce971e8fab6aa02a919071252a7a430\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 342765,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/b8ao9hbZV8bu2PYT-eaVu4CckDs/profile.json",
+            "LastModified": "2026-07-31T19:38:24+00:00",
+            "ETag": "\"25a3267f1acc6331360ddfbe808af33a\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 183,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/dx6cIU2DQ_hOP-DrztZm5YNPLPI/profile.json",
+            "LastModified": "2026-07-31T19:08:39+00:00",
+            "ETag": "\"3d947133b2d74546d0bdac5f6da6b53e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 203,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/fE_l4oaNsfjizz9PophFtyWo0Gw/profile.json",
+            "LastModified": "2026-07-31T20:43:29+00:00",
+            "ETag": "\"3c72e545c4d539d11ff86f95740edb58\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 180,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/k8P0X9Ruf7KTLYLj1NzfJINfvHw/photos/day1/part-line/1785526850531-ab052a49.jpg",
+            "LastModified": "2026-07-31T19:40:51+00:00",
+            "ETag": "\"7b27b5d93fd927b34f96c39d08ea0f27\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 501373,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/k8P0X9Ruf7KTLYLj1NzfJINfvHw/photos/day1/part-line/1785526859164-bb920bac.jpg",
+            "LastModified": "2026-07-31T19:41:00+00:00",
+            "ETag": "\"7b27b5d93fd927b34f96c39d08ea0f27\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 501373,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/k8P0X9Ruf7KTLYLj1NzfJINfvHw/photos/day1/part-line/1785526870365-e75a9f1c.jpg",
+            "LastModified": "2026-07-31T19:41:11+00:00",
+            "ETag": "\"6e4acb4bc9a43862ec731065bee6dcaf\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 519187,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/k8P0X9Ruf7KTLYLj1NzfJINfvHw/photos/day1/part-line/1785526891070-76e65e47.jpg",
+            "LastModified": "2026-07-31T19:41:32+00:00",
+            "ETag": "\"6e4acb4bc9a43862ec731065bee6dcaf\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 519187,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/k8P0X9Ruf7KTLYLj1NzfJINfvHw/profile.json",
+            "LastModified": "2026-07-31T19:40:47+00:00",
+            "ETag": "\"d597684cb8177c2c9b483d9e954be68f\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 183,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/crown/1785509766920-c4ceb2e0.jpg",
+            "LastModified": "2026-07-31T14:56:08+00:00",
+            "ETag": "\"6156b69eb1b41889f7cb85f579f81872\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2901605,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/left/1785509761588-6bf40581.png",
+            "LastModified": "2026-07-31T14:56:02+00:00",
+            "ETag": "\"68ba6ca43c49631f1d71fca005463708\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2239719,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/part-line/1785509752609-778d33ae.png",
+            "LastModified": "2026-07-31T14:55:53+00:00",
+            "ETag": "\"b16fe4bf969963e927c30ed8ef9b9579\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 155845,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/part-line/1785526954595-6622125e.jpg",
+            "LastModified": "2026-07-31T19:42:36+00:00",
+            "ETag": "\"6c4c8b9614e3df5b29080d5a0096a036\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2418388,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/part-line/1785526995005-e4dfa548.jpg",
+            "LastModified": "2026-07-31T19:43:16+00:00",
+            "ETag": "\"7b226d5bdaf1ac28be71bfc7f1f4f35f\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 28448,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/photos/day1/right/1785509756201-91f590ef.png",
+            "LastModified": "2026-07-31T14:55:57+00:00",
+            "ETag": "\"56d64ecde465a056af3e003f26779106\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1838003,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/ue3cKSo5uFcPnaFSreLgBq-e610/profile.json",
+            "LastModified": "2026-07-31T14:55:41+00:00",
+            "ETag": "\"ce80648f5ba872580740cc5d72f1b89d\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 182,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day1/crown/seed-20260731-1-crown.jpg",
+            "LastModified": "2026-07-31T16:02:34+00:00",
+            "ETag": "\"29980931ed9b93535ed6970501573097\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 35187,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day1/left/seed-20260731-1-left.jpg",
+            "LastModified": "2026-07-31T16:02:33+00:00",
+            "ETag": "\"d05e22b28a2ecc294cbecf0a867a90cb\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 30435,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day1/part-line/1785526814345-eff34a50.jpg",
+            "LastModified": "2026-07-31T19:40:16+00:00",
+            "ETag": "\"a2b9ba745012d58a21cead1fed011873\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2443263,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day1/right/seed-20260731-1-right.jpg",
+            "LastModified": "2026-07-31T16:02:33+00:00",
+            "ETag": "\"7490d17543d3782fbe6429efb03bce92\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 32700,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day30/crown/seed-20260731-30-crown.jpg",
+            "LastModified": "2026-07-31T16:02:37+00:00",
+            "ETag": "\"59fe18056eb42ce9804c8e20ac1d6413\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 35419,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day30/left/seed-20260731-30-left.jpg",
+            "LastModified": "2026-07-31T16:02:36+00:00",
+            "ETag": "\"806684793b417ccc81e8d63aadf59dc3\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 31150,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day30/part-line/seed-20260731-30-part-line.jpg",
+            "LastModified": "2026-07-31T16:02:35+00:00",
+            "ETag": "\"1210776334434ce8d1248db20337de8d\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 36785,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day30/right/seed-20260731-30-right.jpg",
+            "LastModified": "2026-07-31T16:02:35+00:00",
+            "ETag": "\"cbb03f52b20e0ab0555cf19e55fa76bd\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 33593,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day60/crown/seed-20260731-60-crown.jpg",
+            "LastModified": "2026-07-31T16:02:39+00:00",
+            "ETag": "\"355bbdcd0ff3cb1392ccb92eb61ba2a8\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 36321,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day60/left/seed-20260731-60-left.jpg",
+            "LastModified": "2026-07-31T16:02:39+00:00",
+            "ETag": "\"1e26079cc8d16c997c8dab13be1ed19b\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 31780,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day60/part-line/seed-20260731-60-part-line.jpg",
+            "LastModified": "2026-07-31T16:02:37+00:00",
+            "ETag": "\"c666263964e14d8f45eac4ee67e9b570\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 37504,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day60/right/seed-20260731-60-right.jpg",
+            "LastModified": "2026-07-31T16:02:38+00:00",
+            "ETag": "\"2e74675604ad07a1b2dac4cf5157b64e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 34861,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day90/crown/seed-20260731-90-crown.jpg",
+            "LastModified": "2026-07-31T16:02:42+00:00",
+            "ETag": "\"075243c264e5da755c4b92eeaf3e4193\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 35710,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day90/left/seed-20260731-90-left.jpg",
+            "LastModified": "2026-07-31T16:02:41+00:00",
+            "ETag": "\"858b2a7e8bc15c6b530d019d83462f34\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 31126,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day90/part-line/seed-20260731-90-part-line.jpg",
+            "LastModified": "2026-07-31T16:02:40+00:00",
+            "ETag": "\"a86a4d3e374067e66baea5dae2e22932\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 36430,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/photos/day90/right/seed-20260731-90-right.jpg",
+            "LastModified": "2026-07-31T16:02:41+00:00",
+            "ETag": "\"079fe1ee11e835ffa49edf83a08cc39e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 34590,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "customers/wYFGHfyMnhRi0rY92fI6FHshWrQ/profile.json",
+            "LastModified": "2026-07-31T16:02:31+00:00",
+            "ETag": "\"34e2ba21b9644708c76fde322c25cf2b\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 227,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": ""
+}

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapier"
+version = "0.1.0"
+description = "Modular Virtual Screening Platform for Molecule Discovery"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "Rapier Development Team"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "networkx>=2.5",
+    "pyyaml>=5.4",
+    "jinja2>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=4.0",
+]
+ui = [
+    "flask>=2.2",
+]
+
+[tool.setuptools.packages.find]
+include = ["rapier*"]
+
+[tool.setuptools.package-data]
+"rapier.slurm" = ["templates/*.j2"]
+"rapier.workflow_builder" = ["static/*.html", "static/*.css", "static/js/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slurm: tests requiring a real SLURM installation",
+    "rdkit: tests requiring RDKit",
+    "vina: tests requiring AutoDock Vina",
+    "boltz2_vina: expensive tests requiring Boltz-2, AutoDock Vina, Meeko, and network access",
+]
+
+[tool.coverage.run]
+source = ["rapier"]
+omit = ["*/tests/*", "*/__pycache__/*"]

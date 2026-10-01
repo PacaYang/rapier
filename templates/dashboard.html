@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rapier Pipeline Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .status-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .status-item {
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .status-item.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-item.running {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status-item.pending {
+            background: #f8f9fa;
+            color: #6c757d;
+        }
+
+        .status-item.failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .status-value {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .tasks-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .task-list {
+            margin-top: 15px;
+        }
+
+        .task-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .task-item:last-child {
+            border-bottom: none;
+        }
+
+        .task-id {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .task-method {
+            flex-grow: 1;
+            margin-left: 15px;
+            color: #6c757d;
+        }
+
+        .task-status {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .task-status.completed {
+            background: #28a745;
+            color: white;
+        }
+
+        .task-status.running {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .task-status.pending {
+            background: #6c757d;
+            color: white;
+        }
+
+        .task-status.failed {
+            background: #dc3545;
+            color: white;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e9ecef;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .timestamp {
+            color: #6c757d;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        h2 {
+            color: #495057;
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .elapsed-time {
+            font-size: 18px;
+            color: #495057;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Rapier Pipeline Dashboard</h1>
+
+        <div id="content">
+            <div class="loading">Loading pipeline status...</div>
+        </div>
+    </div>
+
+    <script>
+        let updateInterval;
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                updateDashboard(data);
+            } catch (error) {
+                console.error('Error fetching status:', error);
+                document.getElementById('content').innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> Failed to fetch pipeline status.
+                    </div>
+                `;
+            }
+        }
+
+        function updateDashboard(data) {
+            const pipeline = data.pipeline || {};
+            const state = pipeline.state || {};
+            const tasks = pipeline.tasks || [];
+
+            const totalTasks = tasks.length;
+            const completed = state.tasks_completed || 0;
+            const failed = state.tasks_failed || 0;
+            const running = state.tasks_running || 0;
+            const pending = totalTasks - completed - failed - running;
+
+            const progress = totalTasks > 0 ? (completed / totalTasks * 100).toFixed(1) : 0;
+
+            const elapsed = formatElapsed(state.elapsed_seconds || 0);
+
+            const html = `
+                <div class="status-card">
+                    <h2>Pipeline: ${pipeline.pipeline_name || 'Unknown'}</h2>
+                    <div class="elapsed-time">⏱️ Elapsed: ${elapsed}</div>
+
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%">
+                            ${progress}%
+                        </div>
+                    </div>
+
+                    <div class="status-grid">
+                        <div class="status-item completed">
+                            <div class="status-label">✓ Completed</div>
+                            <div class="status-value">${completed}</div>
+                        </div>
+                        <div class="status-item running">
+                            <div class="status-label">⟳ Running</div>
+                            <div class="status-value">${running}</div>
+                        </div>
+                        <div class="status-item pending">
+                            <div class="status-label">○ Pending</div>
+                            <div class="status-value">${pending}</div>
+                        </div>
+                        <div class="status-item failed">
+                            <div class="status-label">✗ Failed</div>
+                            <div class="status-value">${failed}</div>
+                        </div>
+                    </div>
+
+                    <div class="timestamp">
+                        Last updated: ${new Date(data.timestamp).toLocaleString()}
+                    </div>
+                </div>
+
+                <div class="tasks-section">
+                    <h2>Tasks (${totalTasks})</h2>
+                    <div class="task-list">
+                        ${tasks.map(task => `
+                            <div class="task-item">
+                                <span class="task-id">${task.id}</span>
+                                <span class="task-method">${task.method}</span>
+                                <span class="task-status ${task.status.toLowerCase()}">${task.status}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('content').innerHTML = html;
+        }
+
+        function formatElapsed(seconds) {
+            if (seconds < 60) {
+                return `${seconds.toFixed(1)}s`;
+            } else if (seconds < 3600) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins}m ${secs}s`;
+            } else {
+                const hours = Math.floor(seconds / 3600);
+                const mins = Math.floor((seconds % 3600) / 60);
+                return `${hours}h ${mins}m`;
+            }
+        }
+
+        // Initial fetch
+        fetchStatus();
+
+        // Update every 2 seconds
+        updateInterval = setInterval(fetchStatus, 2000);
+    </script>
+</body>
+</html>

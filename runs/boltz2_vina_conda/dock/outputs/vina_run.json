@@ -1,0 +1,50 @@
+{
+  "status": "completed",
+  "receptor": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/prepared/receptor.pdbqt",
+  "ligands": [
+    {
+      "index": 0,
+      "ligand": "ligand_1",
+      "input": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/ligands/ligand_1.sdf",
+      "success": true,
+      "scores": [
+        {
+          "mode": 1,
+          "affinity": -6.074,
+          "rmsd_lb": 0.0,
+          "rmsd_ub": 0.0
+        }
+      ],
+      "pdbqt": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_1_out.pdbqt",
+      "sdf": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_1_out.sdf"
+    },
+    {
+      "index": 1,
+      "ligand": "ligand_2",
+      "input": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/ligands/ligand_2.sdf",
+      "success": true,
+      "scores": [
+        {
+          "mode": 1,
+          "affinity": -6.088,
+          "rmsd_lb": 0.0,
+          "rmsd_ub": 0.0
+        },
+        {
+          "mode": 2,
+          "affinity": -6.049,
+          "rmsd_lb": 1.63,
+          "rmsd_ub": 2.562
+        }
+      ],
+      "pdbqt": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_2_out.pdbqt",
+      "sdf": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_2_out.sdf"
+    }
+  ],
+  "successful_ligands": 2,
+  "failed_ligands": [],
+  "outputs": {
+    "docked_poses": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/outputs/docked_poses.sdf",
+    "docking_scores": "/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/outputs/docking_scores.csv"
+  }
+}

@@ -1,0 +1,4 @@
+ligand,mode,affinity_kcal_mol,rmsd_lb,rmsd_ub,scoring_function,pose_file
+ligand_1,1,-6.074,0.0,0.0,vina,/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_1_out.sdf
+ligand_2,1,-6.088,0.0,0.0,vina,/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_2_out.sdf
+ligand_2,2,-6.049,1.63,2.562,vina,/home/pacayang/Documents/Science/rapier/runs/boltz2_vina_conda/dock/vina/poses/ligand_2_out.sdf

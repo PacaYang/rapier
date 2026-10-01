@@ -1,0 +1,62 @@
+# Parallel pipeline fixture for tests: [vina, smina] -> pool -> analyze
+name: parallel_test_pipeline
+description: Parallel pipeline with pooling used in tests
+version: 1.0.0
+failure_policy: continue
+
+methods:
+  - id: vina_dock
+    type: vina_docking
+    description: Vina docking branch
+    parameters:
+      exhaustiveness: 8
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 2h
+    failure_policy: continue
+
+  - id: smina_dock
+    type: smina_docking
+    description: Smina docking branch
+    parameters:
+      scoring: vinardo
+    resources:
+      cpus: 4
+      memory: 8GB
+      time_limit: 2h
+    failure_policy: continue
+
+  - id: pool_results
+    type: ligand_filter
+    description: Pool docking results
+    parameters:
+      mw_max: 500
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 30m
+
+  - id: analyze
+    type: ligand_filter
+    description: Analyze pooled results
+    parameters:
+      mw_max: 450
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 30m
+
+connections:
+  - from: [vina_dock, smina_dock]
+    to: pool_results
+    type: parallel
+  - from: pool_results
+    to: analyze
+    type: serial
+
+pooling_rules:
+  pool_results:
+    strategy: best
+    metric: score
+    minimize: true

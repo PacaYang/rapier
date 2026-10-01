@@ -1,0 +1,76 @@
+# Simple Serial Pipeline Example
+#
+# This example demonstrates a basic serial pipeline where methods
+# execute one after another: A -> B -> C
+#
+# Use case: Sequential filtering and docking workflow
+
+name: simple_serial_screening
+description: A simple serial pipeline for basic virtual screening
+version: 1.0.0
+
+# Global failure policy: stop the entire pipeline if any method fails
+failure_policy: stop
+
+# Method definitions
+methods:
+  # Step 1: Filter molecules by drug-likeness
+  - id: filter_druglike
+    type: filtering
+    description: Filter molecules by Lipinski's Rule of Five
+    config:
+      rules:
+        - lipinski
+        - veber
+      max_violations: 1
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 30m
+    failure_policy: stop
+
+  # Step 2: Dock filtered molecules
+  - id: docking
+    type: vina_dock
+    description: Molecular docking with AutoDock Vina
+    config:
+      receptor: ${PROJECT_DIR}/data/receptor.pdbqt
+      box_center: [10.0, 15.0, 20.0]
+      box_size: [20.0, 20.0, 20.0]
+      exhaustiveness: 8
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 2h
+    failure_policy: stop
+
+  # Step 3: Score and rank results
+  - id: scoring
+    type: scoring
+    description: Score docking results and rank by affinity
+    config:
+      score_function: vina_affinity
+      top_n: 100
+    resources:
+      cpus: 2
+      memory: 2GB
+      time_limit: 15m
+    failure_policy: stop
+
+# Connections define the execution order
+connections:
+  # Filter -> Docking
+  - from: filter_druglike
+    to: docking
+    type: serial
+
+  # Docking -> Scoring
+  - from: docking
+    to: scoring
+    type: serial
+
+# Environment settings
+environment:
+  variables:
+    RECEPTOR_NAME: target_protein
+  project_dir: /path/to/project

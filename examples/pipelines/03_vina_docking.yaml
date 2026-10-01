@@ -1,0 +1,85 @@
+# Example 03: Vina Docking Workflow
+#
+# A complete docking workflow: prepare ligands, dock with AutoDock Vina,
+# then filter the results. VinaDocking is a multi-step method that internally
+# prepares the receptor before docking.
+
+name: vina_docking_workflow
+description: Prepare, dock with Vina, and filter results
+version: 1.0.0
+failure_policy: stop
+
+inputs:
+  receptor:
+    type: structure.protein
+    format: pdb
+    source: ../../tests/fixtures/sample_data/receptor.pdb
+  ligands:
+    type: molecule.collection
+    format: sdf
+    source: ../../tests/fixtures/sample_data/ligands.sdf
+  binding_site:
+    type: binding_site
+    format: box
+    value:
+      center: [10.0, 15.0, 20.0]
+      size: [20.0, 20.0, 20.0]
+
+methods:
+  - id: ligand_prep
+    type: ligand_prep
+    description: Generate 3D conformers and protonate ligands
+    inputs:
+      ligands: pipeline.ligands
+    config:
+      ph: 7.4
+      num_conformers: 1
+    resources:
+      cpus: 2
+      memory: 4GB
+      time_limit: 1h
+
+  - id: dock
+    type: vina_docking
+    description: Dock prepared ligands against the receptor
+    inputs:
+      receptor: pipeline.receptor
+      ligands: ligand_prep.prepared_ligands
+      binding_site: pipeline.binding_site
+    config:
+      exhaustiveness: 8
+      num_modes: 9
+      scoring: vina
+      seed: 12345
+    resources:
+      cpus: 8
+      memory: 8GB
+      time_limit: 4h
+
+  - id: filter_hits
+    type: ligand_filter
+    description: Keep drug-like docked hits
+    inputs:
+      ligands: dock.docked_poses
+    config:
+      mw_max: 500
+    resources:
+      cpus: 1
+      memory: 2GB
+      time_limit: 20m
+
+connections:
+  - from: ligand_prep
+    to: dock
+    type: serial
+  - from: dock
+    to: filter_hits
+    type: serial
+
+environment:
+  variables:
+    RECEPTOR: receptor.pdb
+
+outputs:
+  docked_poses: dock.docked_poses
+  docking_scores: dock.docking_scores
