@@ -1,20 +1,20 @@
 """Lightweight mock methods for exercising the workflow builder.
 
 These methods declare realistic typed ports and configuration fields but do no
-real science: ``execute`` writes small placeholder artifacts for every output
+real science: ``run`` writes small placeholder artifacts for every output
 port. They live outside ``rapier.methods`` so ``auto_discover`` never picks
 them up; call :func:`register_demo_methods` to opt in.
 """
 
 import json
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from ..artifacts import Artifact, ArtifactStorage
-from ..core.enums import TaskStatus
-from ..core.specs import ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec, ResourceSpec
-from ..core.task import Task
-from ..methods.base_implementations import SingleStepMethod
+from ..core.method import Method, RunContext
+from ..core.specs import ConfigField, PortSpec, ResourceSpec
+from ..data import (
+    BindingSite, ComplexStructure, File, Molecule, Molecules, Poses, ProteinSequence, ProteinStructure,
+    Report, Scores, Structure, Table,
+)
 from ..methods.registry import MethodRegistry, get_registry
 
 
@@ -24,71 +24,40 @@ _PLACEHOLDERS = {
     "pdb": "HEADER    DEMO STRUCTURE\nEND\n",
     "sdf": "demo\n  rapier\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$\n",
     "fasta": ">demo\nMKTAYIAKQR\n",
-    "csv": "ligand,mode,affinity_kcal_mol\ndemo,1,-7.5\n",
+    "csv": "id,pose,affinity_kcal_mol\ndemo,1,-7.5\n",
     "a3m": ">query\nMKTAYIAKQR\n",
 }
 
 
-class DemoMethod(SingleStepMethod):
+class DemoMethod(Method):
     """Base class for declarative mock methods.
 
-    Subclasses set ``inputs``, ``outputs``, ``config_fields`` and optionally
-    ``resources`` as class attributes.
+    Subclasses declare ``inputs``, ``outputs``, ``config_fields`` and
+    ``resources`` like any :class:`~rapier.core.method.Method`; ``run`` writes
+    a small placeholder for every output port.
     """
 
     category = "demo"
-    inputs: Dict[str, PortSpec] = {}
-    outputs: Dict[str, PortSpec] = {}
-    config_fields: Dict[str, ConfigField] = {}
+    version = "0.1"
     resources = ResourceSpec(cpus=1, memory="2GB", time="00:10:00")
-    contract_version = 2
 
-    def __init__(self, name: Optional[str] = None, version: str = "0.1", parameters: Optional[Dict[str, Any]] = None):
-        super().__init__(name=name or self.register_name, version=version, parameters=parameters)
-        self.config_spec = ConfigSpec(fields=dict(self.config_fields))
-        self.input_spec = InputSpec(ports=dict(self.inputs))
-        self.output_spec = OutputSpec(ports=dict(self.outputs))
-        self.resource_spec = self.resources
-        self.normalize_config(parameters)
-
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        return self.input_spec.validate(inputs)
-
-    def validate_environment(self) -> Tuple[bool, List[str]]:
-        return True, []
-
-    def execute(self, task: Task) -> TaskStatus:
-        output_dir = Path(task.work_dir or ".") / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
+    def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         outputs: Dict[str, Any] = {}
         for port_name, port in self.output_spec.ports.items():
-            artifact_type = port.types[0]
             artifact_format = port.formats[0] if port.formats else "json"
-            if artifact_format in ("box", "inline"):
-                value: Any = (
-                    {"center": [0.0, 0.0, 0.0], "size": [20.0, 20.0, 20.0]}
-                    if artifact_format == "box" else "MKTAYIAKQR"
-                )
-                artifact = Artifact(artifact_type, artifact_format, storage=ArtifactStorage.INLINE, value=value)
+            if artifact_format == "box":
+                value: Any = port.data_class.inline({"center": [0.0, 0.0, 0.0], "size": [20.0, 20.0, 20.0]}, "box")
+            elif artifact_format == "inline":
+                value = port.data_class.inline("MKTAYIAKQR", "inline")
             else:
-                path = output_dir / f"{port_name}.{artifact_format}"
-                content = _PLACEHOLDERS.get(
+                path = ctx.output_dir / f"{port_name}.{artifact_format}"
+                path.write_text(_PLACEHOLDERS.get(
                     artifact_format,
                     json.dumps({"method": self.name, "port": port_name, "config": self.config}, indent=2),
-                )
-                path.write_text(content)
-                artifact = Artifact(artifact_type, artifact_format, path)
-            outputs[port_name] = [artifact] if port.cardinality == "many" else artifact
-        task.outputs = outputs
-        return TaskStatus.COMPLETED
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> "DemoMethod":
-        return cls(
-            name=config.get("name"),
-            version=config.get("version", "0.1"),
-            parameters=config.get("config") or config.get("parameters") or {},
-        )
+                ))
+                value = path
+            outputs[port_name] = [value] if port.cardinality == "many" else value
+        return outputs
 
 
 class DemoStructurePrediction(DemoMethod):
@@ -98,12 +67,12 @@ class DemoStructurePrediction(DemoMethod):
     display_name = "Structure Prediction"
     category = "prediction"
     inputs = {
-        "sequence": PortSpec("sequence.protein", ("inline", "fasta"), description="Protein sequence to fold"),
-        "msa": PortSpec("file", "a3m", required=False, description="Optional precomputed MSA"),
+        "sequence": PortSpec(ProteinSequence, ("inline", "fasta"), description="Protein sequence to fold"),
+        "msa": PortSpec(File, "a3m", required=False, description="Optional precomputed MSA"),
     }
     outputs = {
-        "structure": PortSpec("structure.protein", "cif", description="Predicted structure"),
-        "confidence": PortSpec("report", "json", description="pLDDT / pTM confidence scores"),
+        "structure": PortSpec(ProteinStructure, "cif", description="Predicted structure"),
+        "confidence": PortSpec(Report, "json", description="pLDDT / pTM confidence scores"),
     }
     config_fields = {
         "num_recycles": ConfigField(int, default=3, minimum=0, maximum=20, description="Recycling iterations"),
@@ -121,13 +90,13 @@ class DemoComplexPrediction(DemoMethod):
     display_name = "Complex Co-folding"
     category = "prediction"
     inputs = {
-        "protein": PortSpec("sequence.protein", ("inline", "fasta"), description="Protein sequence"),
-        "ligand": PortSpec(("molecule", "molecule.collection"), ("smiles", "sdf"), description="Ligand(s)"),
+        "protein": PortSpec(ProteinSequence, ("inline", "fasta"), description="Protein sequence"),
+        "ligand": PortSpec((Molecule, Molecules), ("smiles", "sdf"), description="Ligand(s)"),
     }
     outputs = {
-        "complex": PortSpec("structure.complex", "cif", description="Predicted protein-ligand complex"),
-        "confidence": PortSpec("report", "json", description="Per-complex confidence"),
-        "affinity": PortSpec("table", "csv", description="Predicted binding affinity"),
+        "complex": PortSpec(ComplexStructure, "cif", description="Predicted protein-ligand complex"),
+        "confidence": PortSpec(Report, "json", description="Per-complex confidence"),
+        "affinity": PortSpec(Scores, "csv", description="Predicted binding affinity"),
     }
     config_fields = {
         "diffusion_samples": ConfigField(int, default=1, minimum=1, maximum=25),
@@ -144,11 +113,11 @@ class DemoSequenceDesign(DemoMethod):
     display_name = "Sequence Design"
     category = "design"
     inputs = {
-        "backbone": PortSpec("structure", ("pdb", "cif"), description="Backbone to design against"),
+        "backbone": PortSpec(Structure, ("pdb", "cif"), description="Backbone to design against"),
     }
     outputs = {
-        "sequences": PortSpec("sequence.protein", "fasta", cardinality="many", description="Designed sequences"),
-        "scores": PortSpec("table", "csv", description="Per-design log-likelihood"),
+        "sequences": PortSpec(ProteinSequence, "fasta", cardinality="many", description="Designed sequences"),
+        "scores": PortSpec(Scores, "csv", description="Per-design log-likelihood"),
     }
     config_fields = {
         "num_designs": ConfigField(int, default=8, minimum=1, maximum=1000),
@@ -164,11 +133,11 @@ class DemoPocketDetection(DemoMethod):
     display_name = "Pocket Detection"
     category = "preparation"
     inputs = {
-        "structure": PortSpec("structure.protein", "pdb", description="Protein structure (PDB)"),
+        "structure": PortSpec(ProteinStructure, "pdb", description="Protein structure (PDB)"),
     }
     outputs = {
-        "binding_site": PortSpec("binding_site", "box", description="Top-ranked pocket box"),
-        "pockets": PortSpec("report", "json", description="All detected pockets"),
+        "binding_site": PortSpec(BindingSite, "box", description="Top-ranked pocket box"),
+        "pockets": PortSpec(Report, "json", description="All detected pockets"),
     }
     config_fields = {
         "min_volume": ConfigField((int, float), default=100.0, minimum=0, description="Minimum pocket volume (Å³)"),
@@ -183,13 +152,13 @@ class DemoDocking(DemoMethod):
     display_name = "Docking"
     category = "docking"
     inputs = {
-        "receptor": PortSpec("structure.protein", ("pdb", "cif"), description="Receptor structure"),
-        "ligands": PortSpec("molecule.collection", ("sdf", "smiles"), description="Ligand library"),
-        "binding_site": PortSpec("binding_site", "box", required=False, description="Search box; blind docking if unset"),
+        "receptor": PortSpec(ProteinStructure, ("pdb", "cif"), description="Receptor structure"),
+        "ligands": PortSpec(Molecules, ("sdf", "smiles"), description="Ligand library"),
+        "binding_site": PortSpec(BindingSite, "box", required=False, description="Search box; blind docking if unset"),
     }
     outputs = {
-        "poses": PortSpec("molecule.collection", "sdf", description="Docked poses"),
-        "scores": PortSpec("table", "csv", description="Docking scores"),
+        "poses": PortSpec(Poses, "sdf", description="Docked poses"),
+        "scores": PortSpec(Scores, "csv", description="Docking scores"),
     }
     config_fields = {
         "exhaustiveness": ConfigField(int, default=8, minimum=1, maximum=64),
@@ -206,14 +175,14 @@ class DemoRescoring(DemoMethod):
     display_name = "Rescoring & Ranking"
     category = "analysis"
     inputs = {
-        "poses": PortSpec("molecule.collection", "sdf", description="Poses to rescore"),
-        "receptor": PortSpec("structure", ("pdb", "cif"), required=False, description="Receptor for interaction scoring"),
-        "scores": PortSpec("table", "csv", required=False, description="Upstream scores to combine"),
+        "poses": PortSpec(Molecules, "sdf", description="Poses to rescore"),
+        "receptor": PortSpec(Structure, ("pdb", "cif"), required=False, description="Receptor for interaction scoring"),
+        "scores": PortSpec(Table, "csv", required=False, description="Upstream scores to combine"),
     }
     outputs = {
-        "ranked": PortSpec("table", "csv", description="Ranked candidates"),
-        "top_poses": PortSpec("molecule.collection", "sdf", description="Top-N poses"),
-        "summary": PortSpec("report", "json", description="Run summary"),
+        "ranked": PortSpec(Scores, "csv", description="Ranked candidates"),
+        "top_poses": PortSpec(Molecules, "sdf", description="Top-N poses"),
+        "summary": PortSpec(Report, "json", description="Run summary"),
     }
     config_fields = {
         "top_n": ConfigField(int, default=10, minimum=1),

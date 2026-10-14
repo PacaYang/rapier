@@ -4,18 +4,35 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
 
-from .model import Artifact
+from .model import Artifact, ArtifactStorage, data_class_for
 from .registry import ArtifactRegistry, get_artifact_registry
 
 
 _MISSING = object()
 
 
+TypeRef = Union[str, Type[Artifact]]
+
+
+def _type_name(item: TypeRef) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, type) and issubclass(item, Artifact) and item.type_name:
+        return item.type_name
+    raise TypeError(f"Port types must be type strings or Artifact data classes, got {item!r}")
+
+
 @dataclass(frozen=True)
 class PortSpec:
-    """Accepted or produced artifacts for one named method port."""
+    """Accepted or produced data for one named method port.
+
+    ``types`` may be data classes (``PortSpec(Molecules, "sdf")``) or their
+    type strings (``PortSpec("molecule.collection", "sdf")``); they are stored
+    as type strings so the spec stays serializable.
+    """
 
     types: Tuple[str, ...]
     formats: Tuple[str, ...] = ()
@@ -25,13 +42,15 @@ class PortSpec:
 
     def __init__(
         self,
-        types: Union[str, Iterable[str]],
+        types: Union[TypeRef, Iterable[TypeRef]],
         formats: Union[str, Iterable[str], None] = None,
         required: bool = True,
         cardinality: str = "one",
         description: str = "",
     ) -> None:
-        normalized_types = (types,) if isinstance(types, str) else tuple(types)
+        if isinstance(types, (str, type)):
+            types = (types,)
+        normalized_types = tuple(_type_name(item) for item in types)
         if isinstance(formats, str):
             normalized_formats = (formats,)
         else:
@@ -59,172 +78,92 @@ class PortSpec:
         format_ok = not self.formats or artifact.format in self.formats
         return type_ok and (format_ok or not check_format)
 
+    @property
+    def data_class(self) -> Type[Artifact]:
+        """Data class used to wrap raw values bound to this port (first declared type)."""
+        return data_class_for(self.types[0])
 
-class InputSpec:
-    """Named normalized input ports with a v1 file-spec compatibility view."""
+    def coerce(self, value: Any, directory: Optional[Path] = None, stem: str = "data") -> Artifact:
+        """Wrap a raw value (path, payload, rows) as this port's data type."""
+        return self.data_class.coerce(
+            value, type_name=self.types[0], formats=self.formats, directory=directory, stem=stem
+        )
 
-    def __init__(
-        self,
-        ports: Optional[Dict[str, PortSpec]] = None,
-        required_files: Optional[Union[List[str], Dict[str, Any]]] = None,
-        optional_files: Optional[Union[List[str], Dict[str, Any]]] = None,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    def placeholder(self) -> Artifact:
+        """Representative non-materialized artifact for static compatibility checks."""
+        return Artifact(self.types[0], self.formats[0] if self.formats else "unknown",
+                        "contract-placeholder", storage=ArtifactStorage.INLINE)
+
+
+class _PortMap:
+    """Named ports on one side (inputs or outputs) of a method contract."""
+
+    side = "input"
+
+    def __init__(self, ports: Optional[Dict[str, PortSpec]] = None) -> None:
         if ports is not None and not isinstance(ports, dict):
-            if required_files is not None:
-                raise TypeError("InputSpec received both positional and named legacy files")
-            required_files = ports
-            ports = None
-        self.required_files = required_files or []
-        self.optional_files = optional_files or []
-        self.parameters = parameters or {}
-        self.legacy = ports is None and bool(required_files or optional_files or parameters)
+            raise TypeError(f"{type(self).__name__} takes a dict of PortSpec")
         self.ports: Dict[str, PortSpec] = dict(ports or {})
-        self._add_legacy_ports(self.required_files, required=True)
-        self._add_legacy_ports(self.optional_files, required=False)
-        if ports is not None:
-            self.required_files = [name for name, port in self.ports.items() if port.required]
-            self.optional_files = [name for name, port in self.ports.items() if not port.required]
 
-    def _add_legacy_ports(self, declarations: Any, required: bool) -> None:
-        if not declarations:
-            return
-        items = declarations.items() if isinstance(declarations, dict) else ((name, {}) for name in declarations)
-        for name, declaration in items:
-            if name in self.ports:
-                continue
-            declaration = declaration if isinstance(declaration, dict) else {}
-            formats = declaration.get("format", ())
-            self.ports[name] = PortSpec(
-                "file",
-                formats=formats,
-                required=required,
-                description=declaration.get("description", ""),
-            )
+    @property
+    def required(self) -> List[str]:
+        return [name for name, port in self.ports.items() if port.required]
+
+    @property
+    def optional(self) -> List[str]:
+        return [name for name, port in self.ports.items() if not port.required]
 
     def validate(
         self,
-        inputs: Dict[str, Any],
+        values: Any,
         registry: Optional[ArtifactRegistry] = None,
     ) -> Tuple[bool, List[str]]:
-        from pathlib import Path
-
-        errors: List[str] = []
+        """Check presence, cardinality, artifact validity and type/format of every port."""
+        label = self.side.capitalize()
+        if not isinstance(values, dict):
+            return False, [f"{label}s must be a dictionary of artifacts"]
         registry = registry or get_artifact_registry()
-        for name, port in self.ports.items():
-            if name not in inputs:
-                if port.required:
-                    errors.append(f"Missing required input: {name}")
-                continue
-            values = inputs[name] if port.cardinality == "many" else [inputs[name]]
-            if port.cardinality == "many" and not isinstance(values, (list, tuple)):
-                errors.append(f"Input '{name}' must contain multiple artifacts")
-                continue
-            for value in values:
-                if isinstance(value, Artifact):
-                    valid, artifact_errors = registry.validate(value)
-                    errors.extend(f"Input '{name}': {error}" for error in artifact_errors)
-                    if valid and not port.accepts(value, registry):
-                        errors.append(
-                            f"Input '{name}' received {value.type}/{value.format}; expected "
-                            f"types {list(port.types)} and formats {list(port.formats) or 'any'}"
-                        )
-                elif self.legacy:
-                    if value and not Path(value).exists():
-                        errors.append(f"Input file not found: {value}")
-                else:
-                    errors.append(f"Input '{name}' must be a normalized Artifact")
-
-        for param_name, param_spec in self.parameters.items():
-            if param_spec.get("required", False) and param_name not in inputs:
-                errors.append(f"Missing required parameter: {param_name}")
-        return not errors, errors
-
-
-class OutputSpec:
-    """Named normalized output ports with legacy expected-file support."""
-
-    def __init__(
-        self,
-        ports: Optional[Dict[str, PortSpec]] = None,
-        files: Optional[Union[List[str], Dict[str, Any]]] = None,
-        formats: Optional[Dict[str, str]] = None,
-        optional_files: Optional[Union[List[str], Dict[str, Any]]] = None,
-    ) -> None:
-        if ports is not None and not isinstance(ports, dict):
-            if files is not None:
-                raise TypeError("OutputSpec received both positional and named legacy files")
-            files = ports
-            ports = None
-        self.files = files or []
-        self.formats = formats or {}
-        self.optional_files = optional_files or []
-        self.legacy = ports is None and bool(files or optional_files)
-        self.ports: Dict[str, PortSpec] = dict(ports or {})
-        self._add_legacy_ports(self.files, required=True)
-        self._add_legacy_ports(self.optional_files, required=False)
-        if ports is not None:
-            self.files = [name for name, port in self.ports.items() if port.required]
-            self.optional_files = [name for name, port in self.ports.items() if not port.required]
-
-    def _add_legacy_ports(self, declarations: Any, required: bool) -> None:
-        if not declarations:
-            return
-        items = declarations.items() if isinstance(declarations, dict) else ((name, {}) for name in declarations)
-        for name, declaration in items:
-            if name in self.ports:
-                continue
-            declaration = declaration if isinstance(declaration, dict) else {}
-            formats = declaration.get("format", self.formats.get(name, ()))
-            self.ports[name] = PortSpec(
-                "file",
-                formats=formats,
-                required=required,
-                description=declaration.get("description", ""),
-            )
-
-    def validate(self, output: Any) -> Tuple[bool, List[str]]:
-        from pathlib import Path
-
-        if isinstance(output, (str, Path)):
-            if not self.legacy:
-                return False, [
-                    "Normalized OutputSpec validation requires a dictionary of artifacts"
-                ]
-            output_dir = Path(output)
-            declarations = self.files.keys() if isinstance(self.files, dict) else self.files
-            errors = [
-                f"Expected output not found: {pattern}"
-                for pattern in declarations
-                if not (output_dir / pattern).exists()
-            ]
-            return not errors, errors
-
-        if not isinstance(output, dict):
-            return False, ["Outputs must be a dictionary or output directory"]
+        verb = "received" if self.side == "input" else "produced"
         errors: List[str] = []
-        registry = get_artifact_registry()
         for name, port in self.ports.items():
-            if name not in output:
+            if values.get(name) is None:
                 if port.required:
-                    errors.append(f"Missing required output: {name}")
+                    errors.append(f"Missing required {self.side}: {name}")
                 continue
-            values = output[name] if port.cardinality == "many" else [output[name]]
-            if port.cardinality == "many" and not isinstance(values, (list, tuple)):
-                errors.append(f"Output '{name}' must contain multiple artifacts")
-                continue
-            for value in values:
-                if not isinstance(value, Artifact):
-                    errors.append(f"Output '{name}' must be a normalized Artifact")
+            items = values[name]
+            if port.cardinality == "many":
+                if not isinstance(items, (list, tuple)):
+                    errors.append(f"{label} '{name}' must contain multiple artifacts")
                     continue
-                valid, artifact_errors = registry.validate(value)
-                errors.extend(f"Output '{name}': {error}" for error in artifact_errors)
-                if valid and not port.accepts(value, registry):
+            else:
+                items = [items]
+            for item in items:
+                if not isinstance(item, Artifact):
+                    errors.append(f"{label} '{name}' must be a normalized Artifact")
+                    continue
+                valid, item_errors = registry.validate(item)
+                errors.extend(f"{label} '{name}': {error}" for error in item_errors)
+                if valid and not port.accepts(item, registry):
                     errors.append(
-                        f"Output '{name}' produced {value.type}/{value.format}; expected "
-                        f"types {list(port.types)} and formats {list(port.formats) or 'any'}"
+                        f"{label} '{name}' {verb} {item.type}/{item.format}; expected types "
+                        f"{list(port.types)} and formats {list(port.formats) or 'any'}"
                     )
+        unknown = sorted(set(values) - set(self.ports))
+        if unknown:
+            errors.append(f"Unknown {self.side} port(s): {', '.join(unknown)}")
         return not errors, errors
+
+
+class InputSpec(_PortMap):
+    """Named input ports of a method."""
+
+    side = "input"
+
+
+class OutputSpec(_PortMap):
+    """Named output ports of a method."""
+
+    side = "output"
 
 
 @dataclass(frozen=True)
@@ -312,7 +251,8 @@ class ConfigSpec:
 
         if not self.strict:
             normalized.update({key: value for key, value in config.items() if key not in normalized})
-        if self.validator:
+        # Cross-field checks only see complete, per-field-valid configs.
+        if self.validator and not errors:
             errors.extend(self.validator(normalized))
         if errors:
             raise ValueError("; ".join(errors))

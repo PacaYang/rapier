@@ -9,7 +9,7 @@ from pathlib import Path
 from rapier.core.task import Task
 from rapier.core.enums import TaskStatus
 from rapier.slurm import SlurmClient, SlurmJob, ScriptGenerator
-from rapier.artifacts import InputResolver, OutputNormalizer
+from rapier.artifacts import InputResolver
 
 
 class TaskRunner:
@@ -42,7 +42,6 @@ class TaskRunner:
         self.script_generator = script_generator or ScriptGenerator()
         self.dry_run = dry_run
         self.input_resolver = InputResolver()
-        self.output_normalizer = OutputNormalizer()
 
     def run_task(self, task: Task) -> TaskStatus:
         """
@@ -110,13 +109,11 @@ class TaskRunner:
             task.log_dir = task.work_dir / 'logs'
         task.log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Bind and stage normalized inputs after task directories exist.
-        self.input_resolver.resolve_task(task)
+        # Resolve bindings, then let the method type, convert and stage its inputs.
+        raw_inputs = self.input_resolver.resolve_task(task)
 
         if task.method:
-            is_valid, errors = task.method.input_spec.validate(task.inputs)
-            if not is_valid and getattr(task.method, 'contract_version', 1) >= 2:
-                raise ValueError(f"Input contract validation failed: {', '.join(errors)}")
+            task.inputs = task.method.format_inputs(raw_inputs, task.input_dir / 'normalized')
 
             is_valid, errors = task.method.validate_inputs(task.inputs)
             if not is_valid:
@@ -125,6 +122,8 @@ class TaskRunner:
             is_valid, errors = task.method.validate_environment()
             if not is_valid:
                 raise ValueError(f"Environment validation failed: {', '.join(errors)}")
+        else:
+            task.inputs = raw_inputs
 
         return True
 
@@ -213,13 +212,11 @@ class TaskRunner:
         Args:
             task: Completed task
         """
-        # Read outputs from method
-        if task.method:
+        # Read outputs from method (a dry run never executed anything to collect)
+        if task.method and not self.dry_run:
             try:
-                outputs = task.method.collect_outputs(task)
-                task.outputs.update(outputs)
-                if not self.dry_run:
-                    self.output_normalizer.normalize_task(task)
+                # Methods return outputs already arranged as typed artifacts.
+                task.outputs = dict(task.method.collect_outputs(task))
             except Exception as e:
                 task.error_message = f"Failed to collect outputs: {e}"
 

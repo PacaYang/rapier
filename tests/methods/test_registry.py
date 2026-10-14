@@ -3,7 +3,7 @@
 import pytest
 from rapier.methods.registry import MethodRegistry
 from rapier.methods.screening import LigandFilter
-from rapier.core.base_method import BaseMethod
+from rapier.core.method import Method
 
 
 def test_singleton_pattern():
@@ -101,14 +101,14 @@ def test_unregister():
 
 
 def test_register_invalid_class():
-    """Test that registering non-BaseMethod class raises error."""
+    """Test that registering a non-Method class raises error."""
     registry = MethodRegistry()
     registry.clear()
 
     class NotAMethod:
         pass
 
-    with pytest.raises(ValueError, match="must inherit from BaseMethod"):
+    with pytest.raises(ValueError, match="must inherit from Method"):
         registry.register('invalid', NotAMethod)
 
 

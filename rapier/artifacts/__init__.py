@@ -1,4 +1,8 @@
-"""Normalized artifact contracts and conversion services."""
+"""Artifact envelope, type registry, port contracts and conversion services.
+
+The concrete data types (molecules, scores, structures, ...) live in
+:mod:`rapier.data` and are registered when this package is imported.
+"""
 
 from .model import (
     Artifact,
@@ -6,6 +10,8 @@ from .model import (
     ArtifactStorage,
     artifact_from_data,
     artifact_to_data,
+    data_class_for,
+    format_from_suffix,
 )
 from .registry import ArtifactRegistry, ArtifactType, get_artifact_registry
 from .contracts import ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec
@@ -15,7 +21,10 @@ from .converters import (
     get_converter_registry,
     materialize_inline,
 )
-from .resolver import InputResolver, OutputNormalizer
+from .resolver import InputResolver, prepare_input
+
+# Register the built-in data classes so Artifact(...) dispatches to them.
+import rapier.data  # noqa: E402,F401
 
 __all__ = [
     "Artifact",
@@ -35,6 +44,8 @@ __all__ = [
     "materialize_inline",
     "artifact_to_data",
     "artifact_from_data",
+    "data_class_for",
+    "format_from_suffix",
     "InputResolver",
-    "OutputNormalizer",
+    "prepare_input",
 ]

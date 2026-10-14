@@ -76,61 +76,61 @@ def check_executables(names: List[str]) -> Tuple[bool, List[str]]:
     return len(missing) == 0, missing
 
 
-def load_molecules_from_sdf(path: Path) -> List[Dict[str, Any]]:
-    """Load molecules from an SDF file.
+# Score-column semantics shared by the docking methods' ``docking_scores`` tables.
+DOCKING_SCORE_COLUMNS = {
+    'affinity_kcal_mol': {'better': 'lower', 'unit': 'kcal/mol'},
+    'rmsd_lb': {'unit': 'A'},
+    'rmsd_ub': {'unit': 'A'},
+}
 
-    Args:
-        path: Path to the SDF file
 
-    Returns:
-        List of molecule dictionaries with basic properties
+def rdkit_molecules(molecules: Any) -> List[Tuple[Any, Any]]:
+    """``(MoleculeRecord, rdkit Mol or None)`` for every record of a molecule artifact.
 
-    Note:
-        This is a placeholder. Real implementation would use RDKit:
-        from rdkit import Chem
-        suppl = Chem.SDMolSupplier(str(path))
-        return [mol for mol in suppl if mol is not None]
+    SDF data properties are copied onto the RDKit molecule and ``_Name`` is the
+    record name, so molecules written back out keep their id.
     """
-    if not path.exists():
-        raise FileNotFoundError(f"SDF file not found: {path}")
+    from rdkit import Chem
 
-    # Placeholder implementation - count molecules in SDF
-    molecules = []
-    with open(path, 'r') as f:
-        mol_data = []
-        for line in f:
-            mol_data.append(line)
-            if line.strip() == '$$$$':
-                molecules.append({'sdf_data': ''.join(mol_data)})
-                mol_data = []
+    result = []
+    for record in molecules.records():
+        if record.smiles is not None:
+            mol = Chem.MolFromSmiles(record.smiles)
+        else:
+            mol = Chem.MolFromMolBlock(record.block)
+        if mol is not None:
+            for key, value in record.properties.items():
+                mol.SetProp(key, value)
+            mol.SetProp('_Name', record.name)
+        result.append((record, mol))
+    return result
 
-    return molecules
 
+def write_rdkit_sdf(molecules: List[Any], path: Path) -> Path:
+    """Write RDKit molecules (with their properties) to an SDF file."""
+    from rdkit import Chem
 
-def write_molecules_to_sdf(molecules: List[Any], path: Path) -> None:
-    """Write molecules to an SDF file.
-
-    Args:
-        molecules: List of molecule objects (RDKit Mol objects or dict with sdf_data)
-        path: Output SDF file path
-
-    Note:
-        This is a placeholder. Real implementation would use RDKit:
-        writer = Chem.SDWriter(str(path))
-        for mol in molecules:
-            writer.write(mol)
-        writer.close()
-    """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    writer = Chem.SDWriter(str(path))
+    for mol in molecules:
+        writer.write(mol)
+    writer.close()
+    return path
 
-    with open(path, 'w') as f:
-        for mol in molecules:
-            if isinstance(mol, dict) and 'sdf_data' in mol:
-                f.write(mol['sdf_data'])
-            else:
-                # Placeholder for RDKit Mol objects
-                f.write(str(mol))
-                f.write('\n$$$$\n')
+
+def resolve_box(site: Any, center: Any, size: Any) -> Dict[str, List[float]]:
+    """Docking box from a binding_site input, else from deprecated box_center/box_size config."""
+    if site is not None:
+        return site.box()
+    for label, value in (('box_center', center), ('box_size', size)):
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError(f"{label} must be a list of 3 numbers [x, y, z]")
+        if not all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value):
+            raise ValueError(f"{label} must contain only numbers")
+    if any(item <= 0 for item in size):
+        raise ValueError("box_size dimensions must be positive")
+    return {'center': [float(item) for item in center], 'size': [float(item) for item in size]}
 
 
 def parse_vina_output(output: str) -> List[Dict[str, Any]]:

@@ -4,56 +4,27 @@ from pathlib import Path
 
 import pytest
 
-from rapier.artifacts import Artifact, ArtifactStorage, InputResolver, OutputNormalizer
+from rapier.artifacts import Artifact, ArtifactStorage, InputResolver
 from rapier.config import ConfigParser, ConfigValidator, MethodConfig
-from rapier.core.base_method import BaseMethod
 from rapier.core.enums import TaskStatus
+from rapier.core.method import Method, RunContext
 from rapier.core.pipeline import Pipeline
-from rapier.core.specs import ConfigSpec, InputSpec, OutputSpec, PortSpec
+from rapier.core.specs import PortSpec
 from rapier.core.task import Task
+from rapier.data import BindingSite, Molecules
 from rapier.engine.result import ExecutionResult
 from datetime import datetime
 
 
-class NormalizedPassthrough(BaseMethod):
-    contract_version = 2
+class NormalizedPassthrough(Method):
+    inputs = {
+        "data": PortSpec(Molecules, "sdf"),
+        "site": PortSpec(BindingSite, "box", required=False),
+    }
+    outputs = {"data": PortSpec(Molecules, "sdf")}
 
-    def __init__(self, name="normalized", version="1", parameters=None):
-        super().__init__(name, version, parameters)
-        self.config_spec = ConfigSpec()
-        self.input_spec = InputSpec(ports={
-            "data": PortSpec("molecule.collection", "sdf"),
-            "site": PortSpec("binding_site", "box", required=False),
-        })
-        self.output_spec = OutputSpec(ports={
-            "data": PortSpec("molecule.collection", "sdf"),
-        })
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
-
-    def execute(self, task):
-        task.outputs = {"data": task.inputs["data"]}
-        return TaskStatus.COMPLETED
-
-
-class LegacyPathMethod(BaseMethod):
-    def __init__(self):
-        super().__init__("legacy", "1")
-        self.input_spec = InputSpec(required_files={"data": {"format": "sdf"}})
-        self.output_spec = OutputSpec()
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
-
-    def execute(self, task):
-        return TaskStatus.COMPLETED
+    def run(self, inputs, ctx):
+        return {"data": inputs["data"]}
 
 
 def test_normalized_yaml_builds_data_edges(tmp_path):
@@ -88,7 +59,7 @@ outputs:
 
     pipeline = Pipeline.from_config(config)
     assert pipeline.get_downstream_tasks("first") == ["second"]
-    assert pipeline.tasks["first"].method.contract_version == 2
+    assert isinstance(pipeline.tasks["first"].method, Method)
     assert pipeline.output_bindings == {"final": "second.filtered_ligands"}
 
 
@@ -158,8 +129,6 @@ def test_resolver_routes_upstream_artifact_and_inline_site(tmp_path):
             }
         },
     )
-    destination.input_dir = tmp_path / "destination" / "input"
-    destination.input_dir.mkdir(parents=True)
     pipeline.artifacts["site"] = Artifact(
         "binding_site", "box",
         {"center": [0, 0, 0], "size": [20, 20, 20]},
@@ -168,45 +137,35 @@ def test_resolver_routes_upstream_artifact_and_inline_site(tmp_path):
     pipeline.add_task(source)
     pipeline.add_task(destination)
 
-    resolved = InputResolver().resolve_task(destination)
+    raw = InputResolver().resolve_task(destination)
+    formatted = destination.method.format_inputs(raw, tmp_path / "destination" / "input" / "normalized")
 
-    assert isinstance(resolved["data"], Artifact)
-    assert resolved["data"].path.exists()
-    assert resolved["data"].path.parent.name == "normalized"
-    assert resolved["site"].storage == ArtifactStorage.INLINE
+    assert isinstance(formatted["data"], Molecules)
+    assert formatted["data"].path.exists()
+    assert formatted["data"].path.parent.name == "normalized"
+    assert isinstance(formatted["site"], BindingSite)
+    assert formatted["site"].storage == ArtifactStorage.INLINE
 
 
-def test_resolver_unwraps_artifact_for_v1_method(tmp_path):
-    data_path = tmp_path / "source.sdf"
-    data_path.write_text("molecules")
-    pipeline = Pipeline("legacy")
-    pipeline.artifacts["data"] = Artifact("molecule.collection", "sdf", data_path)
-    task = Task(
-        "legacy",
-        method=LegacyPathMethod(),
-        inputs={},
-        metadata={"input_bindings": {"data": "pipeline.data"}},
-    )
-    task.input_dir = tmp_path / "legacy" / "input"
-    task.input_dir.mkdir(parents=True)
+def test_unresolvable_reference_is_reported():
+    pipeline = Pipeline("missing")
+    task = Task("t", method=NormalizedPassthrough(), inputs={},
+                metadata={"input_bindings": {"data": "pipeline.nope"}})
     pipeline.add_task(task)
-
-    resolved = InputResolver().resolve_task(task)
-
-    assert isinstance(resolved["data"], str)
-    assert Path(resolved["data"]).exists()
+    with pytest.raises(ValueError, match="Unknown pipeline artifact"):
+        InputResolver().resolve_task(task)
 
 
-def test_output_normalizer_adds_provenance(tmp_path):
+def test_format_outputs_adds_provenance(tmp_path):
     output = tmp_path / "output.sdf"
     output.write_text("molecules")
     task = Task("producer", method=NormalizedPassthrough(), inputs={})
-    task.outputs = {"data": str(output)}
+    task.work_dir = tmp_path
 
-    normalized = OutputNormalizer().normalize_task(task)
+    normalized = task.method.format_outputs({"data": str(output)}, RunContext.for_task(task))
 
     artifact = normalized["data"]
-    assert isinstance(artifact, Artifact)
+    assert isinstance(artifact, Molecules)
     assert artifact.type == "molecule.collection"
     assert artifact.provenance.producing_task == "producer"
     assert artifact.provenance.output_port == "data"

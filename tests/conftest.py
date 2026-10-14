@@ -19,44 +19,33 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from rapier.core.base_method import BaseMethod
+from rapier.core.method import Method
 from rapier.core.task import Task
 from rapier.core.pipeline import Pipeline
 from rapier.core.enums import TaskStatus, FailurePolicy
-from rapier.core.specs import InputSpec, OutputSpec, EnvironmentSpec, ResourceSpec
+from rapier.core.specs import ResourceSpec
 
 
 # ---------------------------------------------------------------------------
 # Concrete test method implementations
 # ---------------------------------------------------------------------------
 
-class DummyMethod(BaseMethod):
-    """A trivial method that succeeds immediately.
+class DummyMethod(Method):
+    """A trivial port-less method that succeeds immediately.
 
     Records the number of times it was executed so tests can assert on it.
+    It overrides ``execute`` so orchestration tests never touch the filesystem.
     """
 
-    def __init__(self, name="dummy", version="1.0", parameters=None):
-        super().__init__(name=name, version=version, parameters=parameters)
+    register_name = "dummy"
+    resources = ResourceSpec(cpus=1, memory="1GB", time="00:10:00")
+
+    def __init__(self, name="dummy", config=None, **kwargs):
+        super().__init__(name=name, config=config, **kwargs)
         self.execute_count = 0
 
-    def _create_input_spec(self) -> InputSpec:
-        return InputSpec(required_files=[], optional_files=[], parameters={})
-
-    def _create_output_spec(self) -> OutputSpec:
-        return OutputSpec(files=["result.txt"])
-
-    def _create_env_spec(self) -> EnvironmentSpec:
-        return EnvironmentSpec()
-
-    def _create_resource_spec(self) -> ResourceSpec:
-        return ResourceSpec(cpus=1, memory="1GB", time="00:10:00")
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
+    def run(self, inputs, ctx):
+        return {}
 
     def execute(self, task: Task) -> TaskStatus:
         self.execute_count += 1
@@ -64,26 +53,13 @@ class DummyMethod(BaseMethod):
         return TaskStatus.COMPLETED
 
 
-class FailingMethod(BaseMethod):
+class FailingMethod(Method):
     """A method that always fails, for testing failure handling."""
 
-    def __init__(self, name="failing", version="1.0", parameters=None):
-        super().__init__(name=name, version=version, parameters=parameters)
+    register_name = "failing"
 
-    def _create_input_spec(self) -> InputSpec:
-        return InputSpec()
-
-    def _create_output_spec(self) -> OutputSpec:
-        return OutputSpec()
-
-    def _create_env_spec(self) -> EnvironmentSpec:
-        return EnvironmentSpec()
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
+    def run(self, inputs, ctx):
+        return {}
 
     def execute(self, task: Task) -> TaskStatus:
         task.error_message = "intentional failure"

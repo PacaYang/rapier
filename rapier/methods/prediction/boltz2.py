@@ -6,152 +6,128 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from ...artifacts import Artifact, ArtifactStorage
-from ...core.enums import TaskStatus
-from ...core.specs import (
-    ConfigField,
-    ConfigSpec,
-    InputSpec,
-    OutputSpec,
-    PortSpec,
-    ResourceSpec,
-)
+from ...core.method import Method, RunContext
+from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
 from ...core.task import Task
-from ..base_implementations import SingleStepMethod
+from ...data import (
+    BindingSite, ComplexStructure, DnaSequence, File, Molecule, Molecules, ProteinSequence,
+    ProteinStructure, Report, RnaSequence, Scores, Structure,
+)
 from ..utils import check_executable
-from .boltz2_runner import build_input_yaml, run_manifest
+from .boltz2_runner import _matching_confidence, build_input_yaml, run_manifest
+
+BOLTZ_SCORE_DIRECTIONS = {
+    "confidence_score": "higher",
+    "affinity_pred_value": "lower",
+    "affinity_probability_binary": "higher",
+}
 
 
-class Boltz2Prediction(SingleStepMethod):
-    """Predict biomolecular structures and optional protein-ligand affinity."""
+class Boltz2Prediction(Method):
+    """Predict biomolecular structures and optional protein-ligand affinity.
+
+    Outputs the predicted complexes, Boltz's confidence/affinity reports, a
+    ``scores`` table (one row per model) and, with ``emit_docking_inputs``, a
+    receptor and search box ready for a docking method.
+    """
 
     register_name = "boltz2"
-    contract_version = 2
+    display_name = "Boltz-2"
+    category = "prediction"
+    version = "2.0"
+    inputs = {
+        "proteins": PortSpec(ProteinSequence, ("inline", "fasta"), required=False, cardinality="many"),
+        "dna": PortSpec(DnaSequence, ("inline", "fasta"), required=False, cardinality="many"),
+        "rna": PortSpec(RnaSequence, ("inline", "fasta"), required=False, cardinality="many"),
+        "ligands": PortSpec(
+            (Molecule, Molecules), ("smiles", "sdf", "mol2", "ccd"), required=False, cardinality="many",
+        ),
+        "templates": PortSpec(Structure, ("pdb", "cif"), required=False, cardinality="many"),
+        "msas": PortSpec(File, ("a3m", "csv"), required=False, cardinality="many"),
+        "constraints": PortSpec(File, "json", required=False),
+    }
+    outputs = {
+        "predicted_structures": PortSpec(ComplexStructure, ("cif", "pdb"), cardinality="many"),
+        "confidence_scores": PortSpec(Report, "json", cardinality="many"),
+        "affinity_scores": PortSpec(Report, "json", required=False, cardinality="many"),
+        "scores": PortSpec(Scores, "csv", description="Per-model confidence_score and affinity values"),
+        "prediction_arrays": PortSpec(File, "npz", required=False, cardinality="many"),
+        "run_summary": PortSpec(Report, "json"),
+        "vina_receptor": PortSpec(
+            ProteinStructure, "pdb", required=False,
+            description="Receptor-only structure extracted from the selected Boltz complex",
+        ),
+        "docking_box": PortSpec(
+            BindingSite, "box", required=False,
+            description="Ligand-centered Vina search box extracted from Boltz coordinates",
+        ),
+    }
+    resources = ResourceSpec(cpus=8, memory="32GB", gpus=1, time="12:00:00", partition="gpu")
+    environment = EnvironmentSpec(executables=["boltz", "python"])
+    config_fields = {
+        "cache": ConfigField((str, type(None)), default=None),
+        "checkpoint": ConfigField((str, type(None)), default=None),
+        "devices": ConfigField(int, default=1, minimum=1),
+        "accelerator": ConfigField(str, default="gpu", choices=("gpu", "cpu", "tpu")),
+        "recycling_steps": ConfigField(int, default=3, minimum=0),
+        "sampling_steps": ConfigField(int, default=200, minimum=1),
+        "diffusion_samples": ConfigField(int, default=1, minimum=1),
+        "max_parallel_samples": ConfigField(int, default=5, minimum=1),
+        "step_scale": ConfigField((int, float), default=1.5, minimum=0),
+        "output_format": ConfigField(str, default="mmcif", choices=("mmcif", "pdb")),
+        "num_workers": ConfigField(int, default=2, minimum=0),
+        "preprocessing_threads": ConfigField(
+            (int, type(None)),
+            default=None,
+            validator=lambda value: (
+                "must be >= 1 when set" if value is not None and value < 1 else None
+            ),
+        ),
+        "method": ConfigField((str, type(None)), default=None),
+        "affinity_binder": ConfigField((str, type(None)), default=None),
+        "properties": ConfigField((list, type(None)), default=None),
+        "constraints": ConfigField((list, type(None)), default=None),
+        "use_msa_server": ConfigField(bool, default=True),
+        "msa_server_url": ConfigField(str, default="https://api.colabfold.com"),
+        "msa_pairing_strategy": ConfigField(str, default="greedy", choices=("greedy", "complete")),
+        "single_sequence_mode": ConfigField(bool, default=False),
+        "use_potentials": ConfigField(bool, default=False),
+        "override": ConfigField(bool, default=True),
+        "write_full_pae": ConfigField(bool, default=False),
+        "write_full_pde": ConfigField(bool, default=False),
+        "subsample_msa": ConfigField(bool, default=False),
+        "max_msa_seqs": ConfigField(int, default=8192, minimum=1),
+        "num_subsampled_msa": ConfigField(int, default=1024, minimum=1),
+        "no_kernels": ConfigField(bool, default=False),
+        "sampling_steps_affinity": ConfigField(int, default=200, minimum=1),
+        "diffusion_samples_affinity": ConfigField(int, default=5, minimum=1),
+        "affinity_mw_correction": ConfigField(bool, default=False),
+        "affinity_checkpoint": ConfigField((str, type(None)), default=None),
+        # Optional handoff for downstream docking methods.  Prediction-only
+        # callers keep the historical output contract unless this is enabled.
+        "emit_docking_inputs": ConfigField(bool, default=False),
+        "docking_box_padding": ConfigField((int, float), default=8.0, minimum=0),
+    }
 
-    def __init__(
-        self,
-        name: str = "boltz2",
-        version: str = "2.0",
-        parameters: Optional[Dict[str, Any]] = None,
-    ):
-        super().__init__(name=name, version=version, parameters=parameters)
-        self.config_spec = ConfigSpec(fields={
-            "cache": ConfigField((str, type(None)), default=None),
-            "checkpoint": ConfigField((str, type(None)), default=None),
-            "devices": ConfigField(int, default=1, minimum=1),
-            "accelerator": ConfigField(str, default="gpu", choices=("gpu", "cpu", "tpu")),
-            "recycling_steps": ConfigField(int, default=3, minimum=0),
-            "sampling_steps": ConfigField(int, default=200, minimum=1),
-            "diffusion_samples": ConfigField(int, default=1, minimum=1),
-            "max_parallel_samples": ConfigField(int, default=5, minimum=1),
-            "step_scale": ConfigField((int, float), default=1.5, minimum=0),
-            "output_format": ConfigField(str, default="mmcif", choices=("mmcif", "pdb")),
-            "num_workers": ConfigField(int, default=2, minimum=0),
-            "preprocessing_threads": ConfigField(
-                (int, type(None)),
-                default=None,
-                validator=lambda value: (
-                    "must be >= 1 when set" if value is not None and value < 1 else None
-                ),
-            ),
-            "method": ConfigField((str, type(None)), default=None),
-            "affinity_binder": ConfigField((str, type(None)), default=None),
-            "properties": ConfigField((list, type(None)), default=None),
-            "constraints": ConfigField((list, type(None)), default=None),
-            "use_msa_server": ConfigField(bool, default=True),
-            "msa_server_url": ConfigField(str, default="https://api.colabfold.com"),
-            "msa_pairing_strategy": ConfigField(str, default="greedy", choices=("greedy", "complete")),
-            "single_sequence_mode": ConfigField(bool, default=False),
-            "use_potentials": ConfigField(bool, default=False),
-            "override": ConfigField(bool, default=True),
-            "write_full_pae": ConfigField(bool, default=False),
-            "write_full_pde": ConfigField(bool, default=False),
-            "subsample_msa": ConfigField(bool, default=False),
-            "max_msa_seqs": ConfigField(int, default=8192, minimum=1),
-            "num_subsampled_msa": ConfigField(int, default=1024, minimum=1),
-            "no_kernels": ConfigField(bool, default=False),
-            "sampling_steps_affinity": ConfigField(int, default=200, minimum=1),
-            "diffusion_samples_affinity": ConfigField(int, default=5, minimum=1),
-            "affinity_mw_correction": ConfigField(bool, default=False),
-            "affinity_checkpoint": ConfigField((str, type(None)), default=None),
-            # Optional handoff for downstream docking methods.  Prediction-only
-            # callers keep the historical output contract unless this is enabled.
-            "emit_docking_inputs": ConfigField(bool, default=False),
-            "docking_box_padding": ConfigField((int, float), default=8.0, minimum=0),
-        })
-        self.prediction_params = self.normalize_config(parameters)
-
-        self.input_spec = InputSpec(ports={
-            "proteins": PortSpec("sequence.protein", ("inline", "fasta"), required=False, cardinality="many"),
-            "dna": PortSpec("sequence.dna", ("inline", "fasta"), required=False, cardinality="many"),
-            "rna": PortSpec("sequence.rna", ("inline", "fasta"), required=False, cardinality="many"),
-            "ligands": PortSpec(
-                ("molecule", "molecule.collection"), ("smiles", "sdf", "mol2", "ccd"),
-                required=False, cardinality="many",
-            ),
-            "templates": PortSpec("structure", ("pdb", "cif"), required=False, cardinality="many"),
-            "msas": PortSpec("file", ("a3m", "csv"), required=False, cardinality="many"),
-            "constraints": PortSpec("file", "json", required=False),
-        })
-        self.output_spec = OutputSpec(ports={
-            "predicted_structures": PortSpec("structure.complex", ("cif", "pdb"), cardinality="many"),
-            "confidence_scores": PortSpec("report", "json", cardinality="many"),
-            "affinity_scores": PortSpec("report", "json", required=False, cardinality="many"),
-            "prediction_arrays": PortSpec("file", "npz", required=False, cardinality="many"),
-            "run_summary": PortSpec("report", "json"),
-            "vina_receptor": PortSpec(
-                "structure.protein", "pdb", required=False,
-                description="Receptor-only structure extracted from the selected Boltz complex",
-            ),
-            "docking_box": PortSpec(
-                "binding_site", "box", required=False,
-                description="Ligand-centered Vina search box extracted from Boltz coordinates",
-            ),
-        })
-        self.env_requirements = {
-            "software": ["boltz", "python"],
-            "modules": [],
-            "conda_env": None,
-        }
-        self.resource_spec = ResourceSpec(
-            cpus=8,
-            memory="32GB",
-            gpus=1,
-            time="12:00:00",
-            partition="gpu",
-        )
-
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    def check_inputs(self, inputs: Dict[str, Any]) -> List[str]:
         errors: List[str] = []
         if not any(inputs.get(name) for name in ("proteins", "dna", "rna", "ligands")):
             errors.append("Boltz requires at least one entity input")
-        for port_name in (
-            "proteins", "dna", "rna", "ligands", "templates", "msas", "constraints"
-        ):
-            values = inputs.get(port_name, [])
-            values = values if isinstance(values, list) else [values]
-            for value in values:
-                if not isinstance(value, Artifact):
-                    errors.append(f"Input '{port_name}' must contain normalized Artifacts")
-                    continue
-                if value.is_file and not value.path.exists():
-                    errors.append(f"Input '{port_name}' file not found: {value.path}")
-                if port_name == "ligands" and value.format == "sdf":
-                    try:
-                        import rdkit  # noqa: F401
-                    except ImportError:
-                        errors.append("Boltz SDF ligand inputs require the RDKit package")
-        affinity_binder = self.prediction_params.get("affinity_binder")
-        if affinity_binder and not inputs.get("ligands"):
+        if any(item.format == "sdf" for item in inputs.get("ligands") or []):
+            try:
+                import rdkit  # noqa: F401
+            except ImportError:
+                errors.append("Boltz SDF ligand inputs require the RDKit package")
+        if self.config.get("affinity_binder") and not inputs.get("ligands"):
             errors.append("affinity_binder requires at least one ligand input")
-        if self.prediction_params.get("emit_docking_inputs"):
+        if self.config.get("emit_docking_inputs"):
             if not inputs.get("proteins"):
                 errors.append("emit_docking_inputs requires at least one protein input")
             if not inputs.get("ligands"):
                 errors.append("emit_docking_inputs requires at least one ligand input")
-        return not errors, errors
+        return errors
 
     def validate_environment(self) -> Tuple[bool, List[str]]:
         errors: List[str] = []
@@ -159,7 +135,7 @@ class Boltz2Prediction(SingleStepMethod):
             errors.append("Boltz CLI (boltz) not found in PATH; install boltz[cuda] or boltz")
         if not check_executable("python"):
             errors.append("Python not found in PATH")
-        if self.prediction_params.get("emit_docking_inputs"):
+        if self.config.get("emit_docking_inputs"):
             try:
                 import gemmi  # noqa: F401
             except ImportError:
@@ -173,7 +149,7 @@ class Boltz2Prediction(SingleStepMethod):
         work_dir.mkdir(parents=True, exist_ok=True)
         task.work_dir = work_dir
         input_yaml = work_dir / "boltz2_input.yaml"
-        config = dict(self.prediction_params)
+        config = dict(self.config)
         document = build_input_yaml(task.inputs, config, input_yaml)
         output_dir = work_dir / "boltz2_output"
         entity_mapping = {"polymer_ids": [], "ligand_ids": []}
@@ -201,28 +177,27 @@ class Boltz2Prediction(SingleStepMethod):
         task.intermediate_outputs["boltz2_input_yaml"] = str(input_yaml)
 
     def get_command(self, task: Task) -> str:
+        """Command submitted to SLURM: the Boltz runner on this task's manifest."""
+        ctx = RunContext.for_task(task)
+        task.inputs = self.format_inputs(task.inputs, ctx.input_dir)
         self.prepare(task)
         manifest_path = Path(task.intermediate_outputs["boltz2_manifest"]).resolve()
         return shlex.join([
-            sys.executable,
-            "-m",
-            "rapier.methods.prediction.boltz2_runner",
-            "--manifest",
-            str(manifest_path),
+            sys.executable, "-m", "rapier.methods.prediction.boltz2_runner", "--manifest", str(manifest_path),
         ])
 
-    def execute(self, task: Task) -> TaskStatus:
-        try:
-            self.prepare(task)
-            run_manifest(Path(task.intermediate_outputs["boltz2_manifest"]))
-            self.collect_outputs(task)
-            return TaskStatus.COMPLETED
-        except Exception as exc:
-            task.error_message = f"Boltz-2 prediction failed: {exc}"
-            return TaskStatus.FAILED
+    def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
+        self.prepare(ctx.task)
+        run_manifest(Path(ctx.task.intermediate_outputs["boltz2_manifest"]))
+        return self._collect(ctx.work_dir)
 
     def collect_outputs(self, task: Task) -> Dict[str, Any]:
-        summary_path = Path(task.work_dir) / "outputs" / "boltz2_run.json"
+        ctx = RunContext.for_task(task)
+        return self.format_outputs(self._collect(ctx.work_dir), ctx)
+
+    def _collect(self, work_dir: Path) -> Dict[str, Any]:
+        """Typed outputs from the runner's ``boltz2_run.json`` summary."""
+        summary_path = Path(work_dir) / "outputs" / "boltz2_run.json"
         if not summary_path.exists():
             raise FileNotFoundError("Boltz run summary not found")
         summary = json.loads(summary_path.read_text())
@@ -233,34 +208,25 @@ class Boltz2Prediction(SingleStepMethod):
         for path in structures + confidence + affinity + arrays:
             if not path.exists():
                 raise FileNotFoundError(f"Boltz output file not found: {path}")
-        output_metadata = {
-            "prediction_dir": summary.get("prediction_dir"),
-            "model": "boltz2",
-        }
-        task.outputs = {
+        meta = {"prediction_dir": summary.get("prediction_dir"), "model": "boltz2"}
+        outputs: Dict[str, Any] = {
             "predicted_structures": [
-                Artifact(
-                    "structure.complex",
-                    "pdb" if path.suffix == ".pdb" else "cif",
-                    path,
-                    metadata=output_metadata,
-                )
+                ComplexStructure.from_file(path, "pdb" if path.suffix == ".pdb" else "cif", meta)
                 for path in structures
             ],
-            "confidence_scores": [
-                Artifact("report", "json", path, metadata=output_metadata) for path in confidence
-            ],
-            "run_summary": Artifact("report", "json", summary_path, metadata=output_metadata),
+            "confidence_scores": [Report.from_file(path, "json", meta) for path in confidence],
+            "scores": Scores.from_records(
+                self._score_rows(structures, confidence, affinity),
+                Path(work_dir) / "outputs" / "boltz2_scores.csv",
+                directions=BOLTZ_SCORE_DIRECTIONS, metadata=meta,
+            ),
+            "run_summary": Report.from_file(summary_path, "json", meta),
         }
         if affinity:
-            task.outputs["affinity_scores"] = [
-                Artifact("report", "json", path, metadata=output_metadata) for path in affinity
-            ]
+            outputs["affinity_scores"] = [Report.from_file(path, "json", meta) for path in affinity]
         if arrays:
-            task.outputs["prediction_arrays"] = [
-                Artifact("file", "npz", path, metadata=output_metadata) for path in arrays
-            ]
-        if self.prediction_params.get("emit_docking_inputs"):
+            outputs["prediction_arrays"] = [File.from_file(path, "npz", meta) for path in arrays]
+        if self.config.get("emit_docking_inputs"):
             receptor_path = summary.get("docking_receptor")
             docking_box = summary.get("docking_box")
             if not receptor_path or not docking_box:
@@ -270,23 +236,24 @@ class Boltz2Prediction(SingleStepMethod):
             receptor = Path(receptor_path)
             if not receptor.exists():
                 raise FileNotFoundError(f"Boltz receptor output not found: {receptor}")
-            task.outputs["vina_receptor"] = Artifact(
-                "structure.protein", "pdb", receptor, metadata=output_metadata
-            )
-            task.outputs["docking_box"] = Artifact(
-                "binding_site", "box", docking_box,
-                storage=ArtifactStorage.INLINE,
-                metadata=output_metadata,
-            )
-        return task.outputs
+            outputs["vina_receptor"] = ProteinStructure.from_file(receptor, "pdb", meta)
+            outputs["docking_box"] = BindingSite.inline(docking_box, "box", meta)
+        return outputs
 
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> "Boltz2Prediction":
-        return cls(
-            name=config.get("name", "boltz2"),
-            version=config.get("version", "2.0"),
-            parameters=config.get("parameters", config.get("config", {})),
-        )
+    @staticmethod
+    def _score_rows(structures: List[Path], confidence: List[Path], affinity: List[Path]) -> List[Dict[str, Any]]:
+        """One row per model: its confidence score plus the sample's affinity values."""
+        affinity_values: Dict[str, Any] = {}
+        if affinity:
+            payload = json.loads(affinity[0].read_text())
+            affinity_values = {
+                key: value for key, value in payload.items()
+                if key.startswith("affinity") and isinstance(value, (int, float))
+            }
+        return [
+            {"id": path.stem, "confidence_score": _matching_confidence(path, confidence), **affinity_values}
+            for path in structures
+        ]
 
 
 # Short import alias for callers that refer to the method simply as Boltz2.

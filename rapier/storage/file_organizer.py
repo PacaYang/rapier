@@ -133,26 +133,6 @@ class FileOrganizer:
                     )
                     self.file_tracker.mark_important(value.path)
 
-        # Collect expected files
-        declarations = []
-        if output_spec.legacy:
-            declarations = output_spec.files.keys() if isinstance(output_spec.files, dict) else output_spec.files
-        for expected_file in declarations:
-            output_path = output_dir / expected_file
-
-            if output_path.exists():
-                collected[expected_file] = output_path
-
-                # Track the file
-                if self.file_tracker:
-                    self.file_tracker.register_file(
-                        output_path,
-                        category='output',
-                        task_id=task.task_id,
-                        description=f'Task output: {expected_file}'
-                    )
-                    self.file_tracker.mark_important(output_path)
-
         # Collect all files in output directory
         for file_path in output_dir.rglob('*'):
             if file_path.is_file():

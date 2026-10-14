@@ -2,14 +2,24 @@
 Core module containing base classes for the Rapier platform.
 """
 
-from rapier.core.base_method import BaseMethod
+from rapier.core.method import Method, MethodError, RunContext
 from rapier.core.task import Task
 from rapier.core.pipeline import Pipeline
 from rapier.core.execution_graph import ExecutionGraph
-from rapier.core.specs import ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec
+from rapier.core.specs import (
+    ConfigField,
+    ConfigSpec,
+    EnvironmentSpec,
+    InputSpec,
+    OutputSpec,
+    PortSpec,
+    ResourceSpec,
+)
 
 __all__ = [
-    "BaseMethod",
+    "Method",
+    "MethodError",
+    "RunContext",
     "Task",
     "Pipeline",
     "ExecutionGraph",
@@ -18,4 +28,6 @@ __all__ = [
     "OutputSpec",
     "ConfigField",
     "ConfigSpec",
+    "EnvironmentSpec",
+    "ResourceSpec",
 ]

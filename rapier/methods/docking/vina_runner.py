@@ -16,16 +16,21 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from ...data import molecule_id, sdf_terminated, split_sdf as split_sdf_text
 from ..utils import parse_vina_output, run_command
 
 
-_SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
-
-
 def _safe_name(name: str, fallback: str) -> str:
-    """Return a stable filename component for an SDF molecule name."""
-    normalized = _SAFE_NAME.sub("_", (name or "").strip()).strip("._")
-    return normalized or fallback
+    """Return a stable filename component (and join id) for an SDF molecule name."""
+    return molecule_id(name, fallback)
+
+
+def _retitle(payload: str, title: str) -> str:
+    """Pose records titled with the ligand id, so poses join with score rows."""
+    return "".join(
+        sdf_terminated("\n".join([title] + block.splitlines()[1:]) + "\n")
+        for block in split_sdf_text(payload)
+    )
 
 
 def _unique_name(name: str, used: Dict[str, int]) -> str:
@@ -295,16 +300,14 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
     combined_sdf = output_dir / "docked_poses.sdf"
     with combined_sdf.open("w") as handle:
         for item in successful:
-            payload = Path(item["sdf"]).read_text()
-            handle.write(payload)
-            if payload and not payload.endswith("\n"):
-                handle.write("\n")
+            handle.write(_retitle(Path(item["sdf"]).read_text(), item["ligand"]))
 
+    # Canonical score table: one row per pose, keyed by ligand id and pose rank.
     scores_csv = output_dir / "docking_scores.csv"
     with scores_csv.open("w", newline="") as handle:
         fieldnames = [
-            "ligand",
-            "mode",
+            "id",
+            "pose",
             "affinity_kcal_mol",
             "rmsd_lb",
             "rmsd_ub",
@@ -317,8 +320,8 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
             for score in item["scores"]:
                 writer.writerow(
                     {
-                        "ligand": item["ligand"],
-                        "mode": score["mode"],
+                        "id": item["ligand"],
+                        "pose": score["mode"],
                         "affinity_kcal_mol": score["affinity"],
                         "rmsd_lb": score["rmsd_lb"],
                         "rmsd_ub": score["rmsd_ub"],

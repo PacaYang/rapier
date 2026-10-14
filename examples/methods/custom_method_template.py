@@ -1,314 +1,104 @@
 """Custom method template.
 
-This is a template for creating new screening methods in Rapier.
-Copy this file and modify it to implement your own method.
+Copy this file, rename the class and ``register_name``, then fill in the
+contract and ``run``. A method is a :class:`rapier.Method` subclass that:
 
-To use this template:
-1. Copy this file to a new file with your method name
-2. Rename the class and update the register_name
-3. Implement the required methods
-4. Define input/output specifications
-5. Test your method
-6. Register with the platform
+1. Declares typed ports over the data classes in :mod:`rapier.data`
+   (Molecules, Poses, Scores, ProteinStructure, BindingSite, ...).
+2. Declares its settings as ``config_fields`` (validated strictly).
+3. Implements ``run(inputs, ctx)``: typed inputs in, ``{port: value}`` out.
+
+The base class formats inputs (wraps paths/SMILES/dicts as the port's data
+class, converts formats, stages files) and arranges outputs (paths, row lists
+and dicts become the declared output classes), so this method connects to any
+other method whose ports carry the same types.
+
+Put the file under ``rapier/methods/`` for auto-discovery, or register it
+manually with ``get_registry().register("my_custom_method", MyCustomMethod)``.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from pathlib import Path
-import json
+from typing import Any, Dict, List
 
-from rapier.core.task import Task
-from rapier.core.enums import TaskStatus
-from rapier import Artifact
-from rapier.core.specs import (
-    ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec, ResourceSpec,
+from rapier import (
+    ConfigField, EnvironmentSpec, Method, MethodError, Molecules, PortSpec, ProteinStructure,
+    Report, ResourceSpec, RunContext, Scores,
 )
-from rapier.methods.base_implementations import SingleStepMethod  # or MultiStepMethod
 
 
-class MyCustomMethod(SingleStepMethod):
-    """Brief description of what your method does.
+class MyCustomMethod(Method):
+    """One-line summary shown in the workflow builder palette.
 
-    Longer description explaining the algorithm, its purpose,
-    and how it fits into screening workflows.
+    Longer description of the algorithm and where it fits in a screening
+    workflow.
 
     Parameters:
-        - param1: Description of parameter 1 (type, default, valid range)
-        - param2: Description of parameter 2
-        - param3: Description of parameter 3
+        - min_heavy_atoms: Molecules with fewer heavy atoms are dropped
+        - label: Free-text tag written into every score row
     """
 
-    # This name is used for auto-discovery and config files
-    register_name = "my_custom_method"
-    contract_version = 2
+    register_name = "my_custom_method"   # Type used in pipeline YAML
+    display_name = "My Custom Method"    # Builder card title
+    category = "analysis"                # Builder palette group
+    version = "1.0"
 
-    def __init__(
-        self,
-        name: str = "my_custom_method",
-        version: str = "1.0",
-        parameters: Optional[Dict[str, Any]] = None
-    ):
-        """Initialize the method.
+    inputs = {
+        # Accepting only SDF is enough: SMILES inputs are converted (RDKit) before run().
+        "molecules": PortSpec(Molecules, "sdf", description="Molecules to process"),
+        "reference": PortSpec(ProteinStructure, ("pdb", "cif"), required=False,
+                              description="Optional reference structure"),
+    }
+    outputs = {
+        "kept": PortSpec(Molecules, "sdf", description="Molecules that passed"),
+        "scores": PortSpec(Scores, "csv", description="Per-molecule score keyed by id"),
+        "summary": PortSpec(Report, "json", description="Run statistics"),
+    }
+    config_fields = {
+        "min_heavy_atoms": ConfigField(int, default=1, minimum=0, description="Smallest molecule kept"),
+        "label": ConfigField(str, default="", description="Tag written into every score row"),
+    }
+    resources = ResourceSpec(cpus=1, memory="2GB", time="00:30:00")
+    environment = EnvironmentSpec(executables=[], python_packages=[])
+    # Optional builder widget hints, e.g. {"min_heavy_atoms": {"card": True}}
+    ui_hints: Dict[str, Dict[str, Any]] = {"min_heavy_atoms": {"card": True}}
 
-        Args:
-            name: Method instance name
-            version: Method version
-            parameters: Method-specific parameters
-        """
-        super().__init__(name=name, version=version, parameters=parameters)
+    def check_config(self, config: Dict[str, Any]) -> List[str]:
+        """Cross-field config errors; per-field types/ranges come from config_fields."""
+        return []
 
-        self.config_spec = ConfigSpec(fields={
-            'param1': ConfigField(str, default='default_value'),
-            'param2': ConfigField(int, default=42, minimum=0),
-            'param3': ConfigField(bool, default=True),
-        })
-        self.my_params = self.normalize_config(parameters)
+    def check_inputs(self, inputs: Dict[str, Any]) -> List[str]:
+        """Content checks on inputs that already satisfy the port contract."""
+        return []
 
-        # Define input specification
-        self.input_spec = InputSpec(ports={
-            'input_molecules': PortSpec(
-                'molecule.collection', 'sdf', description='Molecules to process'
-            ),
-            'reference': PortSpec(
-                'structure.protein', ('pdb', 'cif'), required=False,
-                description='Optional reference structure',
-            ),
-        })
+    def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
+        """Do the work. ``ctx.output_dir`` is where to write files."""
+        molecules = inputs["molecules"]
+        kept, rows = [], []
+        for record in molecules.records():  # id, name, block, properties, atoms
+            heavy = len(record.heavy_atoms)
+            passed = heavy >= self.config["min_heavy_atoms"]
+            rows.append({"id": record.id, "heavy_atoms": heavy, "passed": passed, "label": self.config["label"]})
+            if passed:
+                kept.append(record.block)
+        if not rows:
+            raise MethodError("No molecules in input")  # Fails the task with this message.
 
-        # Define output specification
-        self.output_spec = OutputSpec(ports={
-            'results': PortSpec('molecule.collection', 'sdf'),
-            'scores': PortSpec('table', 'csv'),
-            'log': PortSpec('report', 'json'),
-        })
-
-        # Define environment requirements
-        # List all software dependencies
-        self.env_requirements = {
-            'software': ['python', 'rdkit'],  # Executables that must be in PATH
-            'modules': [],  # SLURM modules to load (e.g., ['conda/4.10'])
-            'conda_env': None  # Conda environment name (if needed)
+        return {
+            # A data object written explicitly...
+            "kept": Molecules.write_sdf(kept, ctx.output_dir / "kept.sdf"),
+            # ...or plain values that the base class arranges into the port type:
+            # rows become a Scores CSV, a dict becomes a JSON Report.
+            "scores": Scores.from_records(rows, ctx.output_dir / "scores.csv",
+                                          directions={"heavy_atoms": "higher"}),
+            "summary": {"total": len(rows), "kept": len(kept)},
         }
 
-        # Define resource requirements
-        # Specify SLURM resources needed
-        self.resource_spec = ResourceSpec(
-            cpus=4,  # Number of CPU cores
-            memory="8GB",
-            time="01:00:00",
-            partition='cpu',  # SLURM partition ('cpu', 'gpu', etc.)
-            gpus=0  # Number of GPUs (if needed)
-        )
 
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Validate that input files exist and are valid.
+if __name__ == "__main__":
+    # Quick local check: python examples/methods/custom_method_template.py <ligands.sdf>
+    import sys
 
-        Args:
-            inputs: Dictionary mapping input names to file paths
+    from rapier import Task
 
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        # Check required inputs are present
-        if 'input_molecules' not in inputs:
-            errors.append("Missing required input 'input_molecules'")
-            return False, errors
-
-        # Validate file existence and format
-        input_path = Path(inputs['input_molecules'])
-        if not input_path.exists():
-            errors.append(f"Input file not found: {input_path}")
-        elif input_path.stat().st_size == 0:
-            errors.append(f"Input file is empty: {input_path}")
-
-        # Add any format-specific validation
-        # For example, check if SDF file has molecules:
-        # from rapier.methods.utils import validate_sdf_file
-        # is_valid, error_msg = validate_sdf_file(input_path)
-        # if not is_valid:
-        #     errors.append(error_msg)
-
-        return len(errors) == 0, errors
-
-    def validate_environment(self) -> Tuple[bool, List[str]]:
-        """Validate that required software is available.
-
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        # Check for required executables
-        from rapier.methods.utils import check_executable
-
-        if not check_executable('python'):
-            errors.append("Python not found in PATH")
-
-        # Check for required Python packages
-        try:
-            import rdkit
-        except ImportError:
-            errors.append("RDKit not available")
-
-        # Add any other environment checks
-
-        return len(errors) == 0, errors
-
-    def execute(self, task: Task) -> TaskStatus:
-        """Execute the method logic.
-
-        This is where you implement your actual algorithm.
-
-        Args:
-            task: The task to execute, containing:
-                  - task.inputs: Dict of input file paths
-                  - task.work_dir: Working directory for this task
-                  - task.outputs: Dict to populate with output paths
-
-        Returns:
-            TaskStatus.COMPLETED on success, TaskStatus.FAILED on failure
-        """
-        try:
-            # 1. Validate inputs
-            is_valid, errors = self.validate_inputs(task.inputs)
-            if not is_valid:
-                task.error_message = f"Input validation failed: {errors}"
-                return TaskStatus.FAILED
-
-            # 2. Set up directories
-            work_dir = Path(task.work_dir)
-            output_dir = work_dir / 'outputs'
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            temp_dir = work_dir / 'temp'
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
-            # 3. Load input data
-            input_path = Path(task.inputs['input_molecules'])
-
-            # Example: Load molecules with RDKit
-            try:
-                from rdkit import Chem
-            except ImportError:
-                task.error_message = "RDKit not available"
-                return TaskStatus.FAILED
-
-            suppl = Chem.SDMolSupplier(str(input_path))
-            molecules = [m for m in suppl if m is not None]
-
-            if not molecules:
-                task.error_message = "No valid molecules in input"
-                return TaskStatus.FAILED
-
-            # 4. Process data (YOUR ALGORITHM GOES HERE)
-            results = []
-            scores = []
-
-            for idx, mol in enumerate(molecules):
-                # Example processing
-                mol_name = mol.GetProp('_Name') if mol.HasProp('_Name') else f"mol_{idx}"
-
-                # Do your computation here
-                # result = your_algorithm(mol, self.my_params)
-
-                # Store results
-                # results.append(processed_mol)
-                # scores.append({'name': mol_name, 'score': result})
-                pass
-
-            # 5. Write output files
-            results_path = output_dir / 'results.sdf'
-            # Write results (example)
-            # writer = Chem.SDWriter(str(results_path))
-            # for mol in results:
-            #     writer.write(mol)
-            # writer.close()
-
-            scores_path = output_dir / 'scores.csv'
-            # Write scores (example)
-            # import csv
-            # with open(scores_path, 'w', newline='') as f:
-            #     writer = csv.DictWriter(f, fieldnames=['name', 'score'])
-            #     writer.writeheader()
-            #     writer.writerows(scores)
-
-            log_path = output_dir / 'processing_log.json'
-            log_data = {
-                'total_molecules': len(molecules),
-                'processed': len(results),
-                'parameters': self.my_params
-            }
-            with open(log_path, 'w') as f:
-                json.dump(log_data, f, indent=2)
-
-            # 6. Update task outputs
-            task.outputs = {
-                'results': Artifact('molecule.collection', 'sdf', results_path),
-                'scores': Artifact('table', 'csv', scores_path),
-                'log': Artifact('report', 'json', log_path),
-            }
-
-            return TaskStatus.COMPLETED
-
-        except Exception as e:
-            task.error_message = f"Method execution failed: {e}"
-            return TaskStatus.FAILED
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> 'MyCustomMethod':
-        """Create instance from configuration dictionary.
-
-        This allows your method to be instantiated from pipeline configs.
-
-        Args:
-            config: Configuration dictionary with keys:
-                    - name: Method instance name
-                    - version: Method version
-                    - parameters: Method parameters
-
-        Returns:
-            Instance of your method
-        """
-        return cls(
-            name=config.get('name', 'my_custom_method'),
-            version=config.get('version', '1.0'),
-            parameters=config.get('parameters', {})
-        )
-
-
-# Example usage:
-if __name__ == '__main__':
-    # Create method instance
-    method = MyCustomMethod(
-        name='test_method',
-        version='1.0',
-        parameters={'param1': 'value1', 'param2': 100}
-    )
-
-    # Check environment
-    is_valid, errors = method.validate_environment()
-    if not is_valid:
-        print(f"Environment validation failed: {errors}")
-    else:
-        print("Environment is valid")
-
-    # Create a test task (normally done by the pipeline engine)
-    from rapier.core.task import Task
-
-    task = Task(
-        task_id='test_task',
-        method=method,
-        inputs={'input_molecules': '/path/to/molecules.sdf'}
-    )
-
-    # Validate inputs
-    is_valid, errors = method.validate_inputs(task.inputs)
-    if not is_valid:
-        print(f"Input validation failed: {errors}")
-    else:
-        print("Inputs are valid")
-
-    # Execute (would normally be done via SLURM)
-    # status = method.execute(task)
-    # print(f"Execution status: {status}")
+    task = Task("demo", MyCustomMethod(config={"min_heavy_atoms": 3}), inputs={"molecules": sys.argv[1]})
+    status = task.method.execute(task)
+    print(status.name, task.error_message or {name: str(value) for name, value in task.outputs.items()})

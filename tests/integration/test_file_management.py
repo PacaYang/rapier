@@ -5,7 +5,9 @@ import pytest
 from rapier.storage.structure import ProjectStructure
 from rapier.storage.path_manager import PathManager
 from rapier.storage.file_tracker import FileTracker
-from rapier.storage.file_organizer import FileOrganizer, InputSpec, OutputSpec
+from rapier.core.specs import InputSpec, OutputSpec, PortSpec
+from rapier.data import File, Molecules
+from rapier.storage.file_organizer import FileOrganizer
 from rapier.storage.cleanup_manager import CleanupManager, CleanupPolicy, POLICIES
 from rapier.core.task import Task
 
@@ -81,7 +83,7 @@ class TestFileStaging:
         path_manager.ensure_task_structure("dock")
 
         # use_symlinks=False forces a copy
-        staged = organizer.stage_inputs(task, InputSpec(["ligands"]), use_symlinks=False)
+        staged = organizer.stage_inputs(task, InputSpec({"ligands": PortSpec(Molecules, "sdf")}), use_symlinks=False)
         assert "ligands" in staged
         assert staged["ligands"].exists()
         assert staged["ligands"].read_text() == "molecule data"
@@ -96,7 +98,7 @@ class TestFileStaging:
         task = Task(task_id="t", method=None, inputs={"big": str(source)})
         path_manager.ensure_task_structure("t")
 
-        staged = organizer.stage_inputs(task, InputSpec(["big"]), use_symlinks=True)
+        staged = organizer.stage_inputs(task, InputSpec({"big": PortSpec(File)}), use_symlinks=True)
         # Files under inputs/ should be symlinked
         assert staged["big"].is_symlink()
 
@@ -105,7 +107,7 @@ class TestFileStaging:
         task = Task(task_id="t", method=None, inputs={"x": "/no/such/file.sdf"})
         path_manager.ensure_task_structure("t")
         with pytest.raises(FileNotFoundError):
-            organizer.stage_inputs(task, InputSpec(["x"]), use_symlinks=False)
+            organizer.stage_inputs(task, InputSpec({"x": PortSpec(Molecules, "sdf")}), use_symlinks=False)
 
     def test_collect_outputs(self, path_manager):
         organizer = FileOrganizer(path_manager)
@@ -116,7 +118,7 @@ class TestFileStaging:
         (out_dir / "results.sdf").write_text("results")
 
         task = Task(task_id="t", method=None, inputs={})
-        collected = organizer.collect_outputs(task, OutputSpec(["results.sdf"]))
+        collected = organizer.collect_outputs(task, OutputSpec({"results": PortSpec(Molecules, "sdf")}))
         assert "results.sdf" in collected
         assert collected["results.sdf"].exists()
 

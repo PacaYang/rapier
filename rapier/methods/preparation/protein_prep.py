@@ -1,29 +1,26 @@
 """Protein preparation method for molecular docking.
 
-This method prepares protein receptor structures for docking by fixing
-structural issues, adding hydrogens, and assigning charges.
+Prepares receptor structures by removing waters/heteroatoms, adding hydrogens
+and (optionally) converting to PDBQT with Open Babel.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+import shutil
 from pathlib import Path
-import json
+from typing import Any, Dict, List, Tuple
 
-from ...core.task import Task
-from ...core.enums import TaskStatus
-from ...core.specs import ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec, ResourceSpec
-from ...artifacts import Artifact
-from ..base_implementations import SingleStepMethod
-from ..utils import validate_pdb_file, check_executable, run_command
+from ...core.method import Method, MethodError, RunContext
+from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
+from ...data import ProteinStructure, Report
+from ..utils import run_command, validate_pdb_file
 
 
-class ProteinPreparation(SingleStepMethod):
+class ProteinPreparation(Method):
     """Prepare protein receptor structures for docking.
 
     This method prepares proteins by:
-    1. Fixing structural issues (missing atoms, alternate conformations)
-    2. Adding hydrogens at specified pH
-    3. Assigning partial charges
-    4. Converting to PDBQT format (if requested)
+    1. Removing water molecules and (optionally) heteroatoms
+    2. Fixing structure and adding hydrogens with Open Babel
+    3. Converting to PDBQT with charges (if requested)
 
     Parameters:
         - ph: pH for protonation (default: 7.4)
@@ -34,258 +31,73 @@ class ProteinPreparation(SingleStepMethod):
     """
 
     register_name = "protein_prep"
-    contract_version = 2
+    display_name = "Protein Preparation"
+    category = "preparation"
+    inputs = {
+        "receptor": PortSpec(
+            ProteinStructure, "pdb",
+            description="Protein structure; CIF is converted when an adapter is available",
+        ),
+    }
+    outputs = {
+        "prepared_receptor": PortSpec(ProteinStructure, ("pdb", "pdbqt"), description="Prepared receptor"),
+        "preparation_log": PortSpec(Report, "json", description="Steps applied"),
+    }
+    config_fields = {
+        "ph": ConfigField((int, float), default=7.4, minimum=0, maximum=14),
+        "remove_waters": ConfigField(bool, default=True),
+        "remove_hetero": ConfigField(bool, default=False),
+        "add_charges": ConfigField(bool, default=True),
+        "output_format": ConfigField(str, default="pdbqt", choices=("pdb", "pdbqt")),
+    }
+    resources = ResourceSpec(cpus=1, memory="4GB", time="00:30:00", partition="cpu")
+    environment = EnvironmentSpec(executables=["obabel"])
 
-    def __init__(
-        self,
-        name: str = "protein_prep",
-        version: str = "1.0",
-        parameters: Optional[Dict[str, Any]] = None
-    ):
-        super().__init__(name=name, version=version, parameters=parameters)
-
-        self.config_spec = ConfigSpec(fields={
-            'ph': ConfigField((int, float), default=7.4, minimum=0, maximum=14),
-            'remove_waters': ConfigField(bool, default=True),
-            'remove_hetero': ConfigField(bool, default=False),
-            'add_charges': ConfigField(bool, default=True),
-            'output_format': ConfigField(str, default='pdbqt', choices=('pdb', 'pdbqt')),
-        })
-
-        self.input_spec = InputSpec(
-            ports={
-                'receptor': PortSpec(
-                    'structure.protein', 'pdb',
-                    description='Protein structure; CIF is converted when an adapter is available',
-                )
-            }
-        )
-
-        # Define output specification
-        self.output_spec = OutputSpec(
-            ports={
-                'prepared_receptor': PortSpec('structure.protein', ('pdb', 'pdbqt')),
-                'preparation_log': PortSpec('report', 'json'),
-            }
-        )
-
-        # Define environment requirements
-        self.env_requirements = {
-            'software': ['python', 'obabel', 'pdb2pqr'],
-            'modules': [],
-            'conda_env': None
-        }
-
-        # Define resource requirements
-        self.resource_spec = ResourceSpec(
-            cpus=1,
-            memory="4GB",
-            time="00:30:00",
-            partition='cpu'
-        )
-
-        # Set preparation parameters
-        self.prep_params = self.normalize_config(parameters)
-
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Validate input files.
-
-        Args:
-            inputs: Input file paths
-
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        if 'receptor' not in inputs:
-            errors.append("Missing required input 'receptor'")
-            return False, errors
-
-        receptor_path = Path(inputs['receptor'])
-        is_valid, error_msg = validate_pdb_file(receptor_path)
-        if not is_valid:
-            errors.append(error_msg)
-
-        return len(errors) == 0, errors
-
-    def validate_environment(self) -> Tuple[bool, List[str]]:
-        """Validate that required software is available.
-
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        # Check for Open Babel
-        if not check_executable('obabel'):
-            errors.append("Open Babel (obabel) not found")
-
-        return len(errors) == 0, errors
-
-    def _fix_structure(self, pdb_path: Path, output_path: Path) -> Tuple[bool, str]:
-        """Fix structural issues in PDB file.
-
-        This uses Open Babel to fix common issues like missing atoms.
-
-        Args:
-            pdb_path: Input PDB path
-            output_path: Output PDB path
-
-        Returns:
-            Tuple of (success, message)
-        """
-        cmd = ['obabel', str(pdb_path), '-O', str(output_path), '-h']
-
-        returncode, stdout, stderr = run_command(cmd)
-
-        if returncode != 0:
-            return False, f"Structure fixing failed: {stderr}"
-
-        return True, "Structure fixed successfully"
+    def check_inputs(self, inputs: Dict[str, Any]) -> List[str]:
+        valid, error = validate_pdb_file(inputs["receptor"].path)
+        return [] if valid else [error]
 
     def _remove_waters_and_hetero(self, pdb_path: Path, output_path: Path) -> None:
-        """Remove water molecules and heteroatoms from PDB.
-
-        Args:
-            pdb_path: Input PDB path
-            output_path: Output PDB path
-        """
-        with open(pdb_path) as f_in, open(output_path, 'w') as f_out:
+        with open(pdb_path) as f_in, open(output_path, "w") as f_out:
             for line in f_in:
-                # Skip water molecules
-                if self.prep_params['remove_waters'] and 'HOH' in line:
+                if self.config["remove_waters"] and "HOH" in line:
                     continue
-
-                # Skip heteroatoms (except keep if not removing)
-                if self.prep_params['remove_hetero'] and line.startswith('HETATM'):
+                if self.config["remove_hetero"] and line.startswith("HETATM"):
                     continue
-
                 f_out.write(line)
 
-    def _convert_to_pdbqt(self, pdb_path: Path, pdbqt_path: Path) -> Tuple[bool, str]:
-        """Convert PDB to PDBQT format with charges.
+    def _obabel(self, source: Path, target: Path, *flags: str) -> Tuple[bool, str]:
+        returncode, _, stderr = run_command(["obabel", str(source), "-O", str(target), *flags])
+        return returncode == 0, stderr
 
-        Args:
-            pdb_path: Input PDB path
-            pdbqt_path: Output PDBQT path
+    def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
+        temp_dir = ctx.work_dir / "temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        log: Dict[str, Any] = {"steps": [], "warnings": []}
+        current = inputs["receptor"].path
 
-        Returns:
-            Tuple of (success, message)
-        """
-        # Use Open Babel to convert and add Gasteiger charges
-        cmd = [
-            'obabel',
-            str(pdb_path),
-            '-O', str(pdbqt_path),
-            '-xr'  # Rigid molecule (for receptor)
-        ]
+        if self.config["remove_waters"] or self.config["remove_hetero"]:
+            cleaned = temp_dir / "cleaned.pdb"
+            self._remove_waters_and_hetero(current, cleaned)
+            current = cleaned
+            log["steps"].append("Removed waters/heteroatoms")
 
-        if self.prep_params['add_charges']:
-            cmd.extend(['-p', str(self.prep_params['ph'])])
+        fixed = temp_dir / "fixed.pdb"
+        ok, stderr = self._obabel(current, fixed, "-h")
+        if not ok:
+            raise MethodError(f"Structure fixing failed: {stderr}")
+        log["steps"].append("Fixed structure and added hydrogens")
 
-        returncode, stdout, stderr = run_command(cmd)
+        if self.config["output_format"] == "pdbqt":
+            final = ctx.output_dir / "prepared_receptor.pdbqt"
+            flags = ["-xr"] + (["-p", str(self.config["ph"])] if self.config["add_charges"] else [])
+            ok, stderr = self._obabel(fixed, final, *flags)
+            if not ok:
+                raise MethodError(f"PDBQT conversion failed: {stderr}")
+            log["steps"].append("Converted to PDBQT with charges")
+        else:
+            final = ctx.output_dir / "prepared_receptor.pdb"
+            shutil.copy(fixed, final)
+            log["steps"].append("Output as PDB")
 
-        if returncode != 0:
-            return False, f"PDBQT conversion failed: {stderr}"
-
-        return True, "Converted to PDBQT successfully"
-
-    def execute(self, task: Task) -> TaskStatus:
-        """Execute protein preparation.
-
-        Args:
-            task: The task to execute
-
-        Returns:
-            TaskStatus indicating success or failure
-        """
-        try:
-            # Validate inputs
-            is_valid, errors = self.validate_inputs(task.inputs)
-            if not is_valid:
-                task.error_message = f"Input validation failed: {errors}"
-                return TaskStatus.FAILED
-
-            # Create working directory
-            work_dir = Path(task.work_dir)
-            temp_dir = work_dir / 'temp'
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
-            output_dir = work_dir / 'outputs'
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Track preparation steps
-            log_data = {
-                'steps': [],
-                'warnings': []
-            }
-
-            receptor_path = Path(task.inputs['receptor'])
-            current_path = receptor_path
-
-            # Step 1: Remove waters/heteroatoms if requested
-            if self.prep_params['remove_waters'] or self.prep_params['remove_hetero']:
-                cleaned_path = temp_dir / 'cleaned.pdb'
-                self._remove_waters_and_hetero(current_path, cleaned_path)
-                current_path = cleaned_path
-                log_data['steps'].append('Removed waters/heteroatoms')
-
-            # Step 2: Fix structure
-            fixed_path = temp_dir / 'fixed.pdb'
-            success, message = self._fix_structure(current_path, fixed_path)
-            if not success:
-                task.error_message = message
-                return TaskStatus.FAILED
-            current_path = fixed_path
-            log_data['steps'].append('Fixed structure and added hydrogens')
-
-            # Step 3: Convert to final format
-            if self.prep_params['output_format'] == 'pdbqt':
-                final_path = output_dir / 'prepared_receptor.pdbqt'
-                success, message = self._convert_to_pdbqt(current_path, final_path)
-                if not success:
-                    task.error_message = message
-                    return TaskStatus.FAILED
-                log_data['steps'].append('Converted to PDBQT with charges')
-            else:
-                # Just copy the PDB
-                final_path = output_dir / 'prepared_receptor.pdb'
-                import shutil
-                shutil.copy(current_path, final_path)
-                log_data['steps'].append('Output as PDB')
-
-            # Write log
-            log_path = output_dir / 'prep_log.json'
-            with open(log_path, 'w') as f:
-                json.dump(log_data, f, indent=2)
-
-            # Update task outputs
-            task.outputs = {
-                'prepared_receptor': Artifact(
-                    'structure.protein', self.prep_params['output_format'], final_path
-                ),
-                'preparation_log': Artifact('report', 'json', log_path),
-            }
-
-            return TaskStatus.COMPLETED
-
-        except Exception as e:
-            task.error_message = f"Protein preparation failed: {e}"
-            return TaskStatus.FAILED
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> 'ProteinPreparation':
-        """Create instance from configuration.
-
-        Args:
-            config: Configuration dictionary
-
-        Returns:
-            ProteinPreparation instance
-        """
-        return cls(
-            name=config.get('name', 'protein_prep'),
-            version=config.get('version', '1.0'),
-            parameters=config.get('parameters', {})
-        )
+        return {"prepared_receptor": final, "preparation_log": log}

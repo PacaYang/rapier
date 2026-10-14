@@ -63,9 +63,17 @@ class TestDemoMethods:
     @pytest.mark.parametrize("method_class", DEMO_METHODS, ids=lambda c: c.register_name)
     def test_execute_writes_valid_outputs(self, method_class, tmp_path):
         method = method_class()
-        task = Task("t", method, inputs={})
-        task.work_dir = tmp_path
-        assert method.execute(task) == TaskStatus.COMPLETED
+        # Feed every required port a placeholder of its declared type and format.
+        inputs = {}
+        for name, port in method.input_spec.ports.items():
+            if port.required:
+                fmt = port.formats[0]
+                path = tmp_path / f"{name}.{'smi' if fmt == 'smiles' else fmt}"
+                path.write_text({"pdb": "ATOM\n", "sdf": "x\n\n\nM  END\n$$$$\n", "inline": "MKT\n"}.get(fmt, "CCO x\n"))
+                inputs[name] = "MKTAYIAKQR" if fmt == "inline" else str(path)
+        task = Task("t", method, inputs=inputs)
+        task.work_dir = tmp_path / "work"
+        assert method.execute(task) == TaskStatus.COMPLETED, task.error_message
         valid, errors = method.output_spec.validate(task.outputs)
         assert valid, errors
 

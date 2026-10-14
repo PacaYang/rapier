@@ -54,7 +54,7 @@ ROWS = [
 
 
 def config(**overrides):
-    return {**MoleculeFilter().filter_config, **overrides}
+    return {**MoleculeFilter().config, **overrides}
 
 
 def pose_config(**overrides):

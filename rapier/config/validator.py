@@ -248,14 +248,7 @@ class ConfigValidator:
                 continue
             method_class = method_registry.get(method_config.type)
             try:
-                method = method_class.from_config({
-                    'name': method_config.id,
-                    'version': config.version or '1.0',
-                    'parameters': method_config.config,
-                    'config': method_config.config,
-                })
-                if getattr(method, 'contract_version', 1) >= 2:
-                    method.normalize_config(method_config.config)
+                method = method_class(name=method_config.id, config=method_config.config)
                 instances[method_config.id] = method
             except (TypeError, ValueError) as exc:
                 errors.append(f"Method '{method_config.id}' configuration: {exc}")
@@ -269,17 +262,15 @@ class ConfigValidator:
             if method is None:
                 continue
             input_ports = method.input_spec.ports
-            # Optional hook for requirements that depend on configuration.
-            validate_bindings = getattr(method, 'validate_bindings', None)
-            if callable(validate_bindings):
-                errors.extend(
-                    f"Method '{method_config.id}': {message}"
-                    for message in validate_bindings(method_config.inputs.keys())
-                )
+            # Requirements that depend on configuration (e.g. a filter's position mode).
+            errors.extend(
+                f"Method '{method_config.id}': {message}"
+                for message in method.validate_bindings(method_config.inputs.keys())
+            )
             for port_name, port in input_ports.items():
                 if port.required and port_name not in method_config.inputs:
-                    # Legacy pipelines may inject v1 inputs at execution time.
-                    if normalized_pipeline and getattr(method, 'contract_version', 1) >= 2:
+                    # Pipelines wired only with `connections` bind data at execution time.
+                    if normalized_pipeline:
                         errors.append(
                             f"Method '{method_config.id}': missing binding for required input port "
                             f"'{port_name}'"
@@ -324,7 +315,7 @@ class ConfigValidator:
                             f"'{source_method}' has no output port '{source_port}'"
                         )
                         continue
-                    source_artifact = self._representative_artifact(source_spec)
+                    source_artifact = source_spec.placeholder()
 
                 if source_artifact is not None:
                     destination = input_ports[port_name]
@@ -356,18 +347,6 @@ class ConfigValidator:
                     f"port '{source_port}'"
                 )
         return errors
-
-    @staticmethod
-    def _representative_artifact(port_spec):
-        """Build a non-materialized artifact for static compatibility checks."""
-        from rapier.artifacts import Artifact, ArtifactStorage
-
-        return Artifact(
-            type=port_spec.types[0],
-            format=port_spec.formats[0] if port_spec.formats else "unknown",
-            storage=ArtifactStorage.INLINE,
-            value="contract-placeholder",
-        )
 
     def _validate_pooling_rules(self, config: PipelineConfig) -> List[str]:
         """

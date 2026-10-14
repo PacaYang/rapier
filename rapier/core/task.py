@@ -21,7 +21,7 @@ class Task:
     def __init__(
         self,
         task_id: str,
-        method: Optional['BaseMethod'],
+        method: Optional['Method'],
         inputs: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
     ):
@@ -100,7 +100,7 @@ class Task:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], method: Optional['BaseMethod'] = None) -> 'Task':
+    def from_dict(cls, data: Dict[str, Any], method: Optional['Method'] = None) -> 'Task':
         """
         Deserialize task from dictionary.
 

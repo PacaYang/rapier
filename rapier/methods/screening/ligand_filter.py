@@ -1,27 +1,27 @@
 """Ligand filtering method for property-based molecular screening.
 
-This method filters molecules based on drug-likeness criteria such as
-Lipinski's Rule of Five and other physicochemical properties.
+Filters molecules by drug-likeness criteria (Lipinski's Rule of Five and
+related physicochemical properties) and reports every molecule's computed
+properties as an id-keyed score table, so a downstream ``molecule_filter``
+can rank or gate on them.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from pathlib import Path
-import json
+from typing import Any, Dict, List
 
-from ...core.task import Task
-from ...core.enums import TaskStatus
-from ...core.specs import ConfigField, ConfigSpec, InputSpec, OutputSpec, PortSpec, ResourceSpec
-from ...artifacts import Artifact
-from ..base_implementations import SingleStepMethod
-from ..utils import validate_sdf_file, load_molecules_from_sdf, write_molecules_to_sdf
+from ...core.method import Method, RunContext
+from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
+from ...data import Molecules, Report, Scores
+from ..utils import rdkit_molecules, write_rdkit_sdf
+
+PROPERTY_UNITS = {"mw": "Da", "tpsa": "A^2"}
 
 
-class LigandFilter(SingleStepMethod):
+class LigandFilter(Method):
     """Filter molecules by physicochemical properties.
 
-    This method applies drug-likeness filters based on Lipinski's Rule of Five
-    and other common criteria. Molecules that pass all filters are written to
-    the output file.
+    Molecules that pass every bound are written to ``filtered_ligands``
+    (verbatim for SDF input). ``properties`` lists mw, logp, hba, hbd, tpsa,
+    rotatable_bonds and pass/fail for every input molecule.
 
     Filters available:
         - mw_min, mw_max: Molecular weight bounds (Da)
@@ -39,232 +39,86 @@ class LigandFilter(SingleStepMethod):
     """
 
     register_name = "ligand_filter"
-    contract_version = 2
+    display_name = "Ligand Filter"
+    category = "filter"
+    inputs = {
+        "ligands": PortSpec(Molecules, ("sdf", "smiles"), description="Molecules to filter"),
+    }
+    outputs = {
+        "filtered_ligands": PortSpec(Molecules, "sdf", description="Molecules passing the filters"),
+        "properties": PortSpec(Scores, "csv", description="Computed properties of every molecule"),
+        "statistics": PortSpec(Report, "json", description="Filtering statistics"),
+    }
+    config_fields = {
+        "mw_min": ConfigField((int, float), default=0),
+        "mw_max": ConfigField((int, float), default=500),
+        "logp_min": ConfigField((int, float), default=-5),
+        "logp_max": ConfigField((int, float), default=5),
+        "hba_max": ConfigField(int, default=10, minimum=0),
+        "hbd_max": ConfigField(int, default=5, minimum=0),
+        "tpsa_max": ConfigField((int, float), default=140, minimum=0),
+        "rotatable_bonds_max": ConfigField(int, default=10, minimum=0),
+    }
+    resources = ResourceSpec(cpus=1, memory="4GB", time="01:00:00", partition="cpu")
+    environment = EnvironmentSpec(python_packages=["rdkit"])
 
-    def __init__(
-        self,
-        name: str = "ligand_filter",
-        version: str = "1.0",
-        parameters: Optional[Dict[str, Any]] = None
-    ):
-        super().__init__(name=name, version=version, parameters=parameters)
+    def check_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        if config.get("mw_min", 0) > config.get("mw_max", 500):
+            errors.append("mw_min cannot be greater than mw_max")
+        if config.get("logp_min", -5) > config.get("logp_max", 5):
+            errors.append("logp_min cannot be greater than logp_max")
+        return errors
 
-        self.config_spec = ConfigSpec(fields={
-            'mw_min': ConfigField((int, float), default=0),
-            'mw_max': ConfigField((int, float), default=500),
-            'logp_min': ConfigField((int, float), default=-5),
-            'logp_max': ConfigField((int, float), default=5),
-            'hba_max': ConfigField(int, default=10, minimum=0),
-            'hbd_max': ConfigField(int, default=5, minimum=0),
-            'tpsa_max': ConfigField((int, float), default=140, minimum=0),
-            'rotatable_bonds_max': ConfigField(int, default=10, minimum=0),
-        })
-
-        self.input_spec = InputSpec(
-            ports={
-                'ligands': PortSpec(
-                    'molecule.collection', 'sdf',
-                    description='Molecules to filter',
-                )
-            }
+    def _reasons(self, props: Dict[str, float]) -> List[str]:
+        c = self.config
+        checks = (
+            ("molecular_weight", not c["mw_min"] <= props["mw"] <= c["mw_max"]),
+            ("logp", not c["logp_min"] <= props["logp"] <= c["logp_max"]),
+            ("hba", props["hba"] > c["hba_max"]),
+            ("hbd", props["hbd"] > c["hbd_max"]),
+            ("tpsa", props["tpsa"] > c["tpsa_max"]),
+            ("rotatable_bonds", props["rotatable_bonds"] > c["rotatable_bonds_max"]),
         )
+        return [reason for reason, failed in checks if failed]
 
-        # Define output specification
-        self.output_spec = OutputSpec(
-            ports={
-                'filtered_ligands': PortSpec(
-                    'molecule.collection', 'sdf',
-                    description='Molecules passing the filters',
-                ),
-                'statistics': PortSpec('report', 'json', description='Filtering statistics'),
+    def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
+        from rdkit.Chem import Descriptors
+
+        molecules = rdkit_molecules(inputs["ligands"])
+        stats: Dict[str, Any] = {"total": len(molecules), "passed": 0, "failed": 0, "failed_by_reason": {}}
+        rows, kept_blocks, kept_mols = [], [], []
+        for record, mol in molecules:
+            if mol is None:
+                stats["failed"] += 1
+                rows.append({"id": record.id, "passed": False, "reasons": "unparsable"})
+                continue
+            props = {
+                "mw": round(Descriptors.MolWt(mol), 3),
+                "logp": round(Descriptors.MolLogP(mol), 3),
+                "hba": Descriptors.NOCount(mol),
+                "hbd": Descriptors.NHOHCount(mol),
+                "tpsa": round(Descriptors.TPSA(mol), 3),
+                "rotatable_bonds": Descriptors.NumRotatableBonds(mol),
             }
-        )
+            reasons = self._reasons(props)
+            rows.append({"id": record.id, **props, "passed": not reasons, "reasons": ";".join(reasons)})
+            if reasons:
+                stats["failed"] += 1
+                for reason in reasons:
+                    stats["failed_by_reason"][reason] = stats["failed_by_reason"].get(reason, 0) + 1
+            else:
+                stats["passed"] += 1
+                kept_blocks.append(record.block)
+                kept_mols.append(mol)
 
-        # Define environment requirements
-        self.env_requirements = {
-            'software': ['python', 'rdkit'],
-            'modules': [],
-            'conda_env': None
+        path = ctx.output_dir / "filtered.sdf"
+        if inputs["ligands"].format == "sdf":
+            filtered = Molecules.write_sdf(kept_blocks, path)  # Keep coordinates and hydrogens verbatim.
+        else:
+            filtered = write_rdkit_sdf(kept_mols, path)
+        return {
+            "filtered_ligands": filtered,
+            "properties": Scores.from_records(rows, ctx.output_dir / "properties.csv", units=PROPERTY_UNITS),
+            "statistics": stats,
         }
-
-        # Define resource requirements
-        self.resource_spec = ResourceSpec(
-            cpus=1,
-            memory="4GB",
-            time="01:00:00",
-            partition='cpu'
-        )
-
-        # Set default filter parameters
-        self.filter_params = self.normalize_config(parameters)
-        if self.filter_params['mw_min'] > self.filter_params['mw_max']:
-            raise ValueError("mw_min cannot be greater than mw_max")
-        if self.filter_params['logp_min'] > self.filter_params['logp_max']:
-            raise ValueError("logp_min cannot be greater than logp_max")
-
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Validate that input files exist and are valid.
-
-        Args:
-            inputs: Input file paths
-
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        # Check required input
-        if 'ligands' not in inputs:
-            errors.append("Missing required input 'ligands'")
-            return False, errors
-
-        ligands_path = Path(inputs['ligands'])
-        is_valid, error_msg = validate_sdf_file(ligands_path)
-        if not is_valid:
-            errors.append(error_msg)
-
-        return len(errors) == 0, errors
-
-    def validate_environment(self) -> Tuple[bool, List[str]]:
-        """Validate that required software is available.
-
-        Returns:
-            Tuple of (is_valid, error_list)
-        """
-        errors = []
-
-        # Check Python
-        try:
-            import sys
-            if sys.version_info < (3, 7):
-                errors.append("Python 3.7+ required")
-        except Exception as e:
-            errors.append(f"Python check failed: {e}")
-
-        # Check RDKit (note: may not be installed in test environment)
-        try:
-            import rdkit
-            from rdkit import Chem
-            from rdkit.Chem import Descriptors
-        except ImportError:
-            errors.append("RDKit not available (required for molecular filtering)")
-
-        return len(errors) == 0, errors
-
-    def execute(self, task: Task) -> TaskStatus:
-        """Execute the ligand filtering.
-
-        Args:
-            task: The task to execute
-
-        Returns:
-            TaskStatus indicating success or failure
-        """
-        try:
-            # Validate inputs
-            is_valid, errors = self.validate_inputs(task.inputs)
-            if not is_valid:
-                task.error_message = f"Input validation failed: {errors}"
-                return TaskStatus.FAILED
-
-            # Import RDKit
-            try:
-                from rdkit import Chem
-                from rdkit.Chem import Descriptors, Lipinski
-            except ImportError:
-                task.error_message = "RDKit not available"
-                return TaskStatus.FAILED
-
-            # Load molecules
-            ligands_path = Path(task.inputs['ligands'])
-            suppl = Chem.SDMolSupplier(str(ligands_path))
-
-            # Filter molecules
-            passed = []
-            stats = {
-                'total': 0,
-                'passed': 0,
-                'failed': 0,
-                'failed_by_reason': {}
-            }
-
-            for mol in suppl:
-                stats['total'] += 1
-
-                if mol is None:
-                    stats['failed'] += 1
-                    continue
-
-                # Calculate properties
-                mw = Descriptors.MolWt(mol)
-                logp = Descriptors.MolLogP(mol)
-                hba = Descriptors.NOCount(mol)
-                hbd = Descriptors.NHOHCount(mol)
-                tpsa = Descriptors.TPSA(mol)
-                rot_bonds = Descriptors.NumRotatableBonds(mol)
-
-                # Apply filters
-                reasons = []
-                if mw < self.filter_params['mw_min'] or mw > self.filter_params['mw_max']:
-                    reasons.append('molecular_weight')
-                if logp < self.filter_params['logp_min'] or logp > self.filter_params['logp_max']:
-                    reasons.append('logp')
-                if hba > self.filter_params['hba_max']:
-                    reasons.append('hba')
-                if hbd > self.filter_params['hbd_max']:
-                    reasons.append('hbd')
-                if tpsa > self.filter_params['tpsa_max']:
-                    reasons.append('tpsa')
-                if rot_bonds > self.filter_params['rotatable_bonds_max']:
-                    reasons.append('rotatable_bonds')
-
-                if reasons:
-                    stats['failed'] += 1
-                    for reason in reasons:
-                        stats['failed_by_reason'][reason] = stats['failed_by_reason'].get(reason, 0) + 1
-                else:
-                    stats['passed'] += 1
-                    passed.append(mol)
-
-            # Write filtered molecules
-            output_dir = Path(task.work_dir) / 'outputs'
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            filtered_path = output_dir / 'filtered.sdf'
-            writer = Chem.SDWriter(str(filtered_path))
-            for mol in passed:
-                writer.write(mol)
-            writer.close()
-
-            # Write statistics
-            stats_path = output_dir / 'filter_stats.json'
-            with open(stats_path, 'w') as f:
-                json.dump(stats, f, indent=2)
-
-            # Update task outputs
-            task.outputs = {
-                'filtered_ligands': Artifact('molecule.collection', 'sdf', filtered_path),
-                'statistics': Artifact('report', 'json', stats_path),
-            }
-
-            return TaskStatus.COMPLETED
-
-        except Exception as e:
-            task.error_message = f"Filter execution failed: {e}"
-            return TaskStatus.FAILED
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> 'LigandFilter':
-        """Create a LigandFilter instance from configuration.
-
-        Args:
-            config: Configuration dictionary
-
-        Returns:
-            LigandFilter instance
-        """
-        return cls(
-            name=config.get('name', 'ligand_filter'),
-            version=config.get('version', '1.0'),
-            parameters=config.get('parameters', {})
-        )

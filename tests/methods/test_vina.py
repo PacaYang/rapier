@@ -2,11 +2,10 @@
 
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
+from rapier.data import Molecules, Poses, ProteinStructure, Scores
 from rapier.methods.docking.vina import VinaDocking
-from rapier.core.task import Task
-from rapier.core.enums import TaskStatus
 
 
 def test_vina_initialization():
@@ -23,18 +22,8 @@ def test_vina_initialization():
 
     assert method.name == 'vina'
     assert method.version == '1.2'
-    assert method.docking_params['box_center'] == [1.0, 2.0, 3.0]
-    assert method.docking_params['exhaustiveness'] == 8
-
-
-def test_vina_has_steps():
-    """Test that Vina is a multi-step method."""
-    method = VinaDocking()
-
-    assert hasattr(method, 'steps')
-    assert len(method.steps) == 2
-    assert method.steps[0].name == 'PrepareReceptor'
-    assert method.steps[1].name == 'DockLigands'
+    assert method.config['box_center'] == [1.0, 2.0, 3.0]
+    assert method.config['exhaustiveness'] == 8
 
 
 def test_vina_specifications():
@@ -47,13 +36,12 @@ def test_vina_specifications():
     assert method.env_requirements is not None
     assert method.resource_spec is not None
 
-    # Check required inputs
-    assert 'receptor' in method.input_spec.required_files
-    assert 'ligands' in method.input_spec.required_files
-
-    # Check expected outputs
-    assert 'docked_poses' in method.output_spec.files
-    assert 'docking_scores' in method.output_spec.files
+    # Typed ports: required inputs and the unified docking outputs
+    assert method.input_spec.required == ['receptor', 'ligands']
+    assert method.input_spec.ports['receptor'].data_class is ProteinStructure
+    assert method.input_spec.ports['ligands'].data_class is Molecules
+    assert method.output_spec.ports['docked_poses'].data_class is Poses
+    assert method.output_spec.ports['docking_scores'].data_class is Scores
 
 
 def test_input_validation_missing_files():
@@ -99,7 +87,7 @@ def test_input_validation_invalid_box_params():
         receptor_path = f.name
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False) as f:
-        f.write('$$$$\n')
+        f.write('lig\n\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$\n')
         ligands_path = f.name
 
     try:
@@ -151,33 +139,17 @@ def test_environment_validation_mocked(mock_check):
     assert any('Vina' in err for err in errors)
 
 
-def test_execute_step_invalid_index():
-    """Test execute_step with invalid step index."""
-    method = VinaDocking()
-    task = Task(task_id='test', method=method, inputs={})
-
-    status = method.execute_step(task, 999)
-    assert status == TaskStatus.FAILED
-    assert 'Invalid step index' in task.error_message
-
-
-def test_from_config():
-    """Test creating instance from configuration."""
-    config = {
-        'name': 'my_vina',
-        'version': '1.2',
-        'parameters': {
-            'box_center': [5.0, 5.0, 5.0],
-            'exhaustiveness': 16
-        }
-    }
-
-    method = VinaDocking.from_config(config)
+def test_constructor_takes_pipeline_name_and_config():
+    """Pipelines build methods as Method(name=<step id>, config=<config>)."""
+    method = VinaDocking(name='my_vina', version='1.2', config={
+        'box_center': [5.0, 5.0, 5.0],
+        'exhaustiveness': 16,
+    })
 
     assert method.name == 'my_vina'
     assert method.version == '1.2'
-    assert method.docking_params['box_center'] == [5.0, 5.0, 5.0]
-    assert method.docking_params['exhaustiveness'] == 16
+    assert method.config['box_center'] == [5.0, 5.0, 5.0]
+    assert method.config['exhaustiveness'] == 16
 
 
 def test_parallelizable():
@@ -195,11 +167,11 @@ def test_default_parameters():
     """Test default docking parameters."""
     method = VinaDocking()
 
-    assert method.docking_params['box_center'] == [0.0, 0.0, 0.0]
-    assert method.docking_params['box_size'] == [20.0, 20.0, 20.0]
-    assert method.docking_params['exhaustiveness'] == 8
-    assert method.docking_params['num_modes'] == 9
-    assert method.docking_params['energy_range'] == 3
+    assert method.config['box_center'] == [0.0, 0.0, 0.0]
+    assert method.config['box_size'] == [20.0, 20.0, 20.0]
+    assert method.config['exhaustiveness'] == 8
+    assert method.config['num_modes'] == 9
+    assert method.config['energy_range'] == 3
 
 
 def test_register_name():
@@ -208,60 +180,20 @@ def test_register_name():
     assert VinaDocking.register_name == 'vina_docking'
 
 
-def test_step_resources():
-    """Test that steps have resource specifications."""
-    method = VinaDocking()
-
-    prep_step = method.steps[0]
-    dock_step = method.steps[1]
-
-    assert 'cpus' in prep_step.resource_spec
-    assert 'cpus' in dock_step.resource_spec
-
-    # Docking should need more resources than prep
-    assert dock_step.resource_spec['cpus'] >= prep_step.resource_spec['cpus']
+def test_binding_site_input_overrides_deprecated_box_config(tmp_path, sample_data_dir):
+    method = VinaDocking(config={'box_center': [1.0, 1.0, 1.0]})
+    inputs = method.format_inputs({
+        'receptor': str(sample_data_dir / 'receptor.pdb'),
+        'ligands': str(sample_data_dir / 'ligands.sdf'),
+        'binding_site': {'center': [9.0, 8.0, 7.0], 'size': [10.0, 10.0, 10.0]},
+    }, tmp_path)
+    assert method._box(inputs)['center'] == [9.0, 8.0, 7.0]
+    assert method._box({})['center'] == [1.0, 1.0, 1.0]
 
 
-@patch('rapier.methods.docking.vina.run_command')
-def test_prepare_receptor_step(mock_run, tmp_path):
-    """Test receptor preparation step."""
-    mock_run.return_value = (0, '', '')  # Success
-
-    method = VinaDocking()
-
-    # Create dummy receptor file
-    receptor_pdb = tmp_path / 'receptor.pdb'
-    receptor_pdb.write_text('ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n')
-
-    task = Task(
-        task_id='test',
-        method=method,
-        inputs={'receptor': str(receptor_pdb)}
-    )
-    task.work_dir = str(tmp_path / 'work')
-
-    status = method._prepare_receptor(task)
-
-    assert status == TaskStatus.COMPLETED
-    assert 'receptor_pdbqt' in task.intermediate_outputs
-
-    # Check that obabel was called
-    mock_run.assert_called_once()
-    call_args = mock_run.call_args[0][0]
-    assert 'obabel' in call_args
-
-
-def test_dock_ligands_missing_receptor():
-    """Test docking step without receptor from previous step."""
-    method = VinaDocking()
-
-    task = Task(
-        task_id='test',
-        method=method,
-        inputs={'ligands': '/path/to/ligands.sdf'}
-    )
-
-    status = method._dock_ligands(task)
-
-    assert status == TaskStatus.FAILED
-    assert 'Receptor PDBQT not found' in task.error_message
+def test_invalid_config_rejected_at_construction():
+    import pytest
+    with pytest.raises(ValueError, match="exhaustiveness"):
+        VinaDocking(config={'exhaustiveness': 99})
+    with pytest.raises(ValueError, match="Unknown configuration"):
+        VinaDocking(config={'not_a_setting': 1})

@@ -5,6 +5,7 @@ import json
 
 from rapier.core.enums import TaskStatus
 from rapier.core.task import Task
+from rapier.data import Poses, Scores
 from rapier.methods.docking.vina import VinaDocking
 from rapier.methods.docking import vina_runner
 
@@ -79,12 +80,19 @@ def test_runner_prepares_docks_exports_and_collects_typed_outputs(
 
     status = task.method.execute(task)
 
-    assert status == TaskStatus.COMPLETED
-    assert task.outputs["docked_poses"].type == "molecule.collection"
-    assert task.outputs["docked_poses"].format == "sdf"
-    assert task.outputs["docking_scores"].format == "csv"
-    assert task.outputs["docking_scores"].path.read_text().count("-8.4") == 3
+    assert status == TaskStatus.COMPLETED, task.error_message
+    poses, scores = task.outputs["docked_poses"], task.outputs["docking_scores"]
+    assert isinstance(poses, Poses) and poses.type == "molecule.poses"
+    assert poses.format == "sdf"
+    assert isinstance(scores, Scores) and scores.format == "csv"
+    assert scores.path.read_text().count("-8.4") == 3
     assert (task.work_dir / "outputs" / "vina_run.json").exists()
+    # Unified keys: every score row and every pose title is the same molecule id.
+    assert [(row["id"], row["pose"]) for row in scores.records()] == [
+        ("ethanol", 1), ("benzene", 1), ("acetic_acid", 1),
+    ]
+    assert [record.id for record in poses.records()] == ["ethanol", "benzene", "acetic_acid"]
+    assert scores.directions()["affinity_kcal_mol"] == "lower"
 
 
 def test_runner_keeps_successful_ligands_when_one_fails(tmp_path, sample_data_dir, monkeypatch):

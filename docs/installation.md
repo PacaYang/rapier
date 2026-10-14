@@ -20,12 +20,12 @@ cd rapier
 pip install -e .
 ```
 
-This installs the core dependencies (`networkx`, `pyyaml`) and makes the
-`rapier` package importable.
+This installs the core dependencies (`networkx`, `pyyaml`, `jinja2`) and makes
+the `rapier` package importable.
 
 ### Development dependencies
 
-To run the test suite and build documentation:
+To run the test suite:
 
 ```bash
 pip install -e ".[dev]"
@@ -35,14 +35,27 @@ pip install -r requirements-dev.txt
 
 This adds `pytest`, `pytest-cov`, `black`, and `flake8`.
 
+### Workflow builder
+
+The visual pipeline editor needs Flask:
+
+```bash
+pip install -e ".[ui]"
+python -m rapier.workflow_builder     # http://127.0.0.1:8765
+```
+
 ## Core Python Dependencies
 
 | Package | Purpose | Required |
 |---------|---------|----------|
 | `networkx` | DAG construction and topological sorting | Yes |
 | `pyyaml` | Pipeline configuration parsing | Yes |
-| `jinja2` | SLURM script generation | Yes (for SLURM) |
-| `pytest` | Testing | Dev only |
+| `jinja2` | SLURM script generation | Yes |
+| `pytest`, `pytest-cov`, `black`, `flake8` | Testing and linting | `dev` extra |
+| `flask` | Workflow builder | `ui` extra |
+| `rich` | Richer `CLIMonitor` output | Optional |
+| `flask-cors`, `flask-socketio` | Logging `Dashboard` / `DashboardWithWebSocket` | Optional |
+| `requests` | Alert `webhook_handler` | Optional |
 
 ## External Scientific Tools
 
@@ -87,18 +100,21 @@ conda install -c conda-forge vina meeko gemmi prody
 # pip alternative: pip install -U numpy scipy rdkit vina meeko gemmi prody
 ```
 
-Verify the complete CLI environment before submitting a pipeline:
+`vina_docking` also checks that ProDy is importable, because Meeko's receptor
+preparation needs it. Verify the complete environment before submitting a
+pipeline:
 
 ```bash
 command -v vina
 command -v mk_prepare_receptor.py
 command -v mk_prepare_ligand.py
 command -v mk_export.py
+python -c "import prody"
 ```
 
 ### Smina
 
-Needed by `smina_docking`.
+Needed by `smina_docking` (which also needs Open Babel).
 
 ```bash
 conda install -c conda-forge smina
@@ -106,8 +122,8 @@ conda install -c conda-forge smina
 
 ### Open Babel
 
-Needed by some legacy preparation methods and converters. It is not used by
-the Vina integration for PDBQT preparation or pose export because converting
+Needed by `protein_prep` and `smina_docking`, and used as a fallback format
+converter. It is not used by the Vina integration for PDBQT preparation or pose export because converting
 PDBQT back through Open Babel can lose bond orders and formal charges. Meeko's
 `mk_export.py` is used instead.
 
@@ -162,9 +178,13 @@ python3 -c "import rapier; print(rapier.__version__)"
 # Validate an example pipeline
 python3 scripts/validate_config.py examples/pipelines/01_ligand_filtering.yaml --build
 
-# Run the test suite
+# Run the test suite (needs the dev extra)
 scripts/run_tests.sh unit
 ```
+
+Tests that need SLURM or external tools are marked `slurm`, `rdkit`, `vina`, or
+`boltz2_vina` and skip when the tools are missing. See
+[Running the Tests](../README.md#running-the-tests).
 
 If the unit tests pass and the example validates, you're ready to go. Continue
 to the [Getting Started](getting_started.md) guide.

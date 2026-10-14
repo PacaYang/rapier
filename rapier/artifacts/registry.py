@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .model import Artifact, ArtifactStorage
 
@@ -85,90 +83,43 @@ class ArtifactRegistry:
         return not errors, errors
 
 
-def _sequence_validator(alphabet: str) -> ArtifactValidator:
-    allowed = set(alphabet.upper())
-
-    def validate(artifact: Artifact) -> List[str]:
-        if artifact.storage != ArtifactStorage.INLINE:
-            return []
-        sequence = re.sub(r"\s+", "", str(artifact.value)).upper()
-        invalid = sorted(set(sequence) - allowed)
-        if not sequence:
-            return ["Inline sequence cannot be empty"]
-        if invalid:
-            return [f"Sequence contains invalid symbols: {', '.join(invalid)}"]
-        return []
-
-    return validate
+def _parent_type(cls: type) -> Tuple[str, ...]:
+    """Registry parent of a data class: the nearest base that declares a type."""
+    for base in cls.__mro__[1:]:
+        name = base.__dict__.get("type_name")
+        if name:
+            return (name,)
+    return ()
 
 
-def _binding_site_validator(artifact: Artifact) -> List[str]:
-    if artifact.storage != ArtifactStorage.INLINE:
-        return []
-    value = artifact.value
-    if artifact.format == "box":
-        if not isinstance(value, dict):
-            return ["Binding-site box must be an object with center and size"]
-        center = value.get("center")
-        size = value.get("size")
-        if not isinstance(center, (list, tuple)) or len(center) != 3:
-            return ["Binding-site box center must contain three coordinates"]
-        if not isinstance(size, (list, tuple)) or len(size) != 3:
-            return ["Binding-site box size must contain three dimensions"]
-        if not all(isinstance(item, (int, float)) for item in list(center) + list(size)):
-            return ["Binding-site box center and size must be numeric"]
-        if any(item <= 0 for item in size):
-            return ["Binding-site box dimensions must be positive"]
-    elif artifact.format == "residues":
-        if not isinstance(value, list) or not value:
-            return ["Residue binding site must be a non-empty list"]
-    return []
+def _artifact_type(name: str, cls: type) -> ArtifactType:
+    description = (cls.__doc__ or "").strip().splitlines()[0] if cls.__doc__ else ""
+    return ArtifactType(name, tuple(cls.formats), _parent_type(cls), cls.check_value, description)
 
 
 def create_default_registry() -> ArtifactRegistry:
+    """Registry of every data class in :mod:`rapier.data` (and any later subclasses)."""
+    import rapier.data  # noqa: F401  (registers the built-in data classes)
+    from .model import data_classes
+
     registry = ArtifactRegistry()
-    definitions: Iterable[ArtifactType] = (
-        ArtifactType("sequence", ("inline", "fasta"), description="Biological sequence"),
-        ArtifactType(
-            "sequence.protein",
-            ("inline", "fasta"),
-            ("sequence",),
-            _sequence_validator("ABCDEFGHIKLMNPQRSTVWXYZ*UOJ"),
-        ),
-        ArtifactType(
-            "sequence.dna",
-            ("inline", "fasta"),
-            ("sequence",),
-            _sequence_validator("ACGTNRYKMSWBDHV-"),
-        ),
-        ArtifactType(
-            "sequence.rna",
-            ("inline", "fasta"),
-            ("sequence",),
-            _sequence_validator("ACGUNRYKMSWBDHV-"),
-        ),
-        ArtifactType("molecule", ("smiles", "sdf", "mol2", "pdbqt", "ccd")),
-        ArtifactType("molecule.collection", ("smiles", "sdf", "mol2", "pdbqt", "ccd")),
-        ArtifactType("structure", ("pdb", "cif", "pdbqt")),
-        ArtifactType("structure.protein", ("pdb", "cif", "pdbqt"), ("structure",)),
-        ArtifactType("structure.nucleic_acid", ("pdb", "cif"), ("structure",)),
-        ArtifactType("structure.complex", ("pdb", "cif"), ("structure",)),
-        ArtifactType(
-            "binding_site",
-            ("box", "residues", "reference", "json"),
-            validator=_binding_site_validator,
-        ),
-        ArtifactType("table", ("csv", "tsv", "json")),
-        ArtifactType("report", ("json", "text", "html", "csv")),
-        ArtifactType("file", ("*",)),
-    )
-    for definition in definitions:
-        registry.register(definition)
+    for name, cls in data_classes().items():
+        registry.register(_artifact_type(name, cls))
     return registry
 
 
-_default_registry = create_default_registry()
+_default_registry: Optional[ArtifactRegistry] = None
 
 
 def get_artifact_registry() -> ArtifactRegistry:
+    """Shared registry; data classes defined after first use are added on demand."""
+    global _default_registry
+    if _default_registry is None:
+        _default_registry = create_default_registry()
+    else:
+        from .model import data_classes
+
+        for name, cls in data_classes().items():
+            if not _default_registry.has(name):
+                _default_registry.register(_artifact_type(name, cls))
     return _default_registry

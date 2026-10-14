@@ -14,7 +14,7 @@ management.
 - 📊 **Comprehensive Monitoring** — multi-level logging and dashboards
 - 🔄 **Robust Failure Handling** — `stop`, `continue`, and `retry` policies
 - 📁 **Smart File Management** — automatic cleanup that preserves important outputs
-- 🧬 **Multi-Step Methods** — complex workflows like receptor prep + docking
+- 🧬 **Typed, Connectable Methods** — one `Method` base class; ports carry typed data (`Molecules`, `Poses`, `Scores`, ...) and score tables share an `id` key, so any compatible methods chain
 - 🗺️ **Visual Workflow Builder** — drag-and-connect pipeline editor with typed sockets and live validation
 - 🧪 **Tested** — unit, integration, and end-to-end test suites
 
@@ -85,6 +85,11 @@ result = engine.execute(pipeline)
 print(result.generate_report())
 ```
 
+A dry run submits nothing and produces no outputs, so it checks scheduling
+and scripts; `search` above fails there because `filter` has no
+`filtered_ligands`. With `dry_run=False`, each job runs its method on the
+compute node (most through `python -m rapier.methods.runner`).
+
 See the [Getting Started guide](docs/getting_started.md) for a full walkthrough.
 
 ## Workflow Builder
@@ -109,15 +114,17 @@ python -m rapier.workflow_builder            # http://127.0.0.1:8765
 **How it works**
 
 - **Sockets come from method contracts.** Every input and output port declared
-  in a method's `InputSpec`/`OutputSpec` becomes a socket, coloured by artifact
+  in a method's `inputs`/`outputs` becomes a socket, coloured by artifact
   type. Square sockets accept many artifacts, `?` marks optional inputs, and
-  unconnected required inputs are highlighted.
+  unconnected required inputs are highlighted. Data types, including new
+  ones such as `molecule.poses` and `table.scores`, come from the
+  `rapier.data` classes.
 - **Type-checked connections.** While dragging a wire, compatible sockets glow
   green (direct match) or amber (an automatic conversion such as `cif → pdb`
   will run); incompatible ones dim. Compatibility is computed server-side with
   the same rules as `ConfigValidator`, so the editor and CLI always agree.
 - **Inspector.** Selecting a card shows a form generated from the method's
-  `ConfigSpec` (checkboxes, dropdowns, bounded numbers), resources, failure
+  `config_fields` (checkboxes, dropdowns, bounded numbers), resources, failure
   policy, and dropdowns for wiring inputs without dragging. Methods can supply
   richer widgets through a `ui_hints` class attribute; `molecule_filter`
   uses this for its rule editor and card summary chips.
@@ -154,10 +161,12 @@ through `ExecutionEngine` as shown above.
 |-------|-------------|
 | [Installation](docs/installation.md) | Install Rapier and its dependencies |
 | [Getting Started](docs/getting_started.md) | Your first pipeline, step by step |
-| [Pipeline Configuration](docs/pipeline_configuration.md) | Complete YAML reference |
+| [Pipeline Configuration](docs/pipeline_configuration.md) | Pipeline YAML guide |
+| [Config Reference](docs/config_reference.md) | Field-by-field configuration reference |
 | [Method Reference](docs/method_reference.md) | All built-in methods |
 | [Method Development](docs/method_development_guide.md) | Write your own methods |
 | [Architecture](docs/architecture.md) | How the platform works |
+| [Logging Guide](docs/logging_guide.md) | Logging, monitoring, dashboards, and alerts |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 | [API Reference](docs/api_reference.md) | Public classes and signatures |
 | [FAQ](docs/faq.md) | Frequently asked questions |
@@ -166,14 +175,14 @@ through `ExecutionEngine` as shown above.
 
 | Type | Purpose |
 |------|---------|
-| `ligand_filter` | Filter molecules by drug-likeness properties |
-| `molecule_filter` | Filter poses by upstream scores and binding position |
+| `ligand_filter` | Filter molecules by drug-likeness properties; reports every molecule's properties as scores |
+| `molecule_filter` | Filter and gate poses by upstream scores and binding position |
 | `similarity_search` | Fingerprint-based Tanimoto similarity search |
 | `ligand_prep` | 3D conformer generation, protonation, minimization |
 | `protein_prep` | Receptor preparation and PDBQT conversion |
 | `vina_docking` | AutoDock Vina docking with Meeko preparation/export |
 | `smina_docking` | Smina docking with custom scoring |
-| `boltz2` | Boltz-2 complex and affinity prediction |
+| `boltz2` | Boltz-2 complex and affinity prediction (also registered as `boltz2_prediction`) |
 
 ## Example Pipelines
 
@@ -186,20 +195,35 @@ Ready-to-run configurations live in [`examples/pipelines/`](examples/pipelines/)
 - `05_failure_handling.yaml` — mixed failure policies
 - `06_boltz2_prediction.yaml` — Boltz-2 structure and affinity prediction
 - `07_boltz2_vina.yaml` — Boltz-2-predicted receptor and binding box passed to Vina
-- `08_vina_dock_and_filter.yaml` — Vina docking followed by score and binding-position filtering
+- `08_docking_funnel.yaml` — two-round Vina docking funnel gated by `molecule_filter`
+- `simple_serial.yaml`, `multi_step_method.yaml`, `parallel_pooling.yaml` — minimal serial, multi-step, and pooling topologies
 
 All examples can also be opened in the [workflow builder](#workflow-builder) from its *Example* menu.
 
 ## Running the Tests
 
 ```bash
+pip install -e ".[dev]"
 scripts/run_tests.sh             # all tests
-scripts/run_tests.sh unit        # unit tests only
+scripts/run_tests.sh unit        # unit | integration | e2e | methods | all
 scripts/run_tests.sh all --cov   # with a coverage report
 ```
 
-Tests requiring SLURM or external docking tools are skipped automatically when
-those are unavailable.
+Tests that need external software carry pytest markers and are skipped when the
+software is missing:
+
+| Marker | Requires |
+|--------|----------|
+| `slurm` | a real SLURM installation (`sbatch`) |
+| `rdkit` | RDKit |
+| `vina` | AutoDock Vina, Open Babel, and RDKit |
+| `boltz2_vina` | Boltz-2, Vina, Meeko, ProDy, network access, and `RAPIER_RUN_BOLTZ2_VINA_E2E=1` |
+
+```bash
+python -m pytest -m "not slurm and not rdkit and not vina and not boltz2_vina"   # fast local run
+python -m pytest -m vina                                                         # only Vina tests
+RAPIER_RUN_BOLTZ2_VINA_E2E=1 python -m pytest -m boltz2_vina                     # expensive Boltz-2 → Vina run
+```
 
 ## Project Structure
 
@@ -207,6 +231,8 @@ those are unavailable.
 rapier/
 ├── rapier/                    # Main package
 │   ├── core/                  # Core classes (Method, Task, Pipeline, Graph)
+│   ├── data/                  # Typed data classes (Molecules, Poses, Scores, ...)
+│   ├── artifacts/             # Artifact registry, port contracts, converters
 │   ├── config/                # YAML configuration system
 │   ├── slurm/                 # SLURM integration
 │   ├── engine/                # Execution engine

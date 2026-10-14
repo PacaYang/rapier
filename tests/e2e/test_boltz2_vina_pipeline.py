@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from rapier.artifacts import Artifact, ArtifactStorage, InputResolver, OutputNormalizer
+from rapier.artifacts import Artifact, ArtifactStorage, InputResolver
 from rapier.config import ConfigParser
 from rapier.core.enums import TaskStatus
 from rapier.core.pipeline import Pipeline
@@ -24,6 +24,10 @@ def test_supplied_pipeline_resolves_boltz_outputs_into_vina(tmp_path):
     dock = pipeline.tasks["dock"]
     resolver = InputResolver()
 
+    def stage(task):
+        """What TaskRunner.prepare_task does: resolve bindings, then let the method format them."""
+        task.inputs = task.method.format_inputs(resolver.resolve_task(task), task.input_dir / "normalized")
+
     for task in (predict, prepare, dock):
         task.work_dir = tmp_path / task.task_id
         task.input_dir = task.work_dir / "input"
@@ -32,7 +36,7 @@ def test_supplied_pipeline_resolves_boltz_outputs_into_vina(tmp_path):
         for directory in (task.input_dir, task.output_dir, task.log_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
-    resolver.resolve_task(predict)
+    stage(predict)
     assert predict.inputs["proteins"][0].type == "sequence.protein"
     assert predict.inputs["ligands"][0].type == "molecule.collection"
 
@@ -46,10 +50,9 @@ def test_supplied_pipeline_resolves_boltz_outputs_into_vina(tmp_path):
             storage=ArtifactStorage.INLINE,
         ),
     }
-    resolver.resolve_task(prepare)
+    stage(prepare)
     assert prepare.method.execute(prepare) == TaskStatus.COMPLETED, prepare.error_message
-    OutputNormalizer().normalize_task(prepare)
-    resolver.resolve_task(dock)
+    stage(dock)
 
     assert dock.inputs["receptor"].type == "structure.protein"
     assert dock.inputs["receptor"].is_file
@@ -93,7 +96,6 @@ def test_supplied_pipeline_with_real_boltz_and_vina(tmp_path):
     pytest.importorskip("rdkit")
     pipeline = Pipeline.from_config(ConfigParser().parse_file(str(EXAMPLE)))
     resolver = InputResolver()
-    normalizer = OutputNormalizer()
 
     for task_id in ("predict", "prepare_ligands", "dock"):
         task = pipeline.tasks[task_id]
@@ -103,16 +105,13 @@ def test_supplied_pipeline_with_real_boltz_and_vina(tmp_path):
         task.log_dir = task.work_dir / "logs"
         for directory in (task.input_dir, task.output_dir, task.log_dir):
             directory.mkdir(parents=True, exist_ok=True)
-        resolver.resolve_task(task)
-        valid, errors = task.method.input_spec.validate(task.inputs)
-        assert valid, errors
+        task.inputs = task.method.format_inputs(resolver.resolve_task(task), task.input_dir / "normalized")
         valid, errors = task.method.validate_inputs(task.inputs)
         assert valid, errors
         valid, errors = task.method.validate_environment()
         assert valid, errors
         status = task.method.execute(task)
         assert status == TaskStatus.COMPLETED, task.error_message
-        normalizer.normalize_task(task)
 
     predict = pipeline.tasks["predict"]
     dock = pipeline.tasks["dock"]

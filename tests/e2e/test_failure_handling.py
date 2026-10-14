@@ -141,59 +141,28 @@ class TestFailureHandlerDecisions:
 # Helper methods used in these tests
 # ---------------------------------------------------------------------------
 
-from rapier.core.base_method import BaseMethod
-from rapier.core.specs import InputSpec, OutputSpec, EnvironmentSpec
+from rapier.core.method import Method
 
 
-class DummyDownstream(BaseMethod):
+class DummyDownstream(Method):
     """A method that should never run (downstream of a failure)."""
 
     def __init__(self):
-        super().__init__(name="downstream", version="1.0")
+        super().__init__(name="downstream")
         self.ran = False
-
-    def _create_input_spec(self):
-        return InputSpec()
-
-    def _create_output_spec(self):
-        return OutputSpec()
-
-    def _create_env_spec(self):
-        return EnvironmentSpec()
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
 
     def execute(self, task):
         self.ran = True
         return TaskStatus.COMPLETED
 
 
-class FlakyMethod(BaseMethod):
+class FlakyMethod(Method):
     """Fails the first ``fail_times`` attempts, then succeeds."""
 
     def __init__(self, fail_times=1):
-        super().__init__(name="flaky", version="1.0")
+        super().__init__(name="flaky")
         self.fail_times = fail_times
         self.attempts = 0
-
-    def _create_input_spec(self):
-        return InputSpec()
-
-    def _create_output_spec(self):
-        return OutputSpec()
-
-    def _create_env_spec(self):
-        return EnvironmentSpec()
-
-    def validate_inputs(self, inputs):
-        return True, []
-
-    def validate_environment(self):
-        return True, []
 
     def execute(self, task):
         self.attempts += 1

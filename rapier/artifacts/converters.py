@@ -85,9 +85,12 @@ class ConverterRegistry:
             if candidate_depth is not None and len(path) >= candidate_depth:
                 continue
             for converter in converters:
-                if (converter.source_type, converter.source_format) != state:
+                # A converter for a parent type also applies to its subtypes (poses, scores).
+                if converter.source_format != state[1] or not self.artifact_registry.is_compatible(
+                    state[0], converter.source_type
+                ):
                     continue
-                next_state = (converter.target_type, converter.target_format)
+                next_state = (self._result_type(state[0], converter), converter.target_format)
                 next_path = path + [converter]
                 if is_target(next_state):
                     candidate_depth = len(next_path)
@@ -109,9 +112,16 @@ class ConverterRegistry:
         )
         return candidates[0]
 
-    def convert_for_port(self, artifact: Artifact, port: "PortSpec", work_dir: Path) -> Artifact:
-        from .contracts import PortSpec
+    def _result_type(self, current_type: str, converter: ArtifactConverter) -> str:
+        """Type after a conversion: a subtype survives if it supports the new format."""
+        if converter.source_type == converter.target_type and current_type != converter.target_type:
+            if self.artifact_registry.has(current_type):
+                formats = self.artifact_registry.get(current_type).formats
+                if converter.target_format in formats or "*" in formats:
+                    return current_type
+        return converter.target_type
 
+    def convert_for_port(self, artifact: Artifact, port: "PortSpec", work_dir: Path) -> Artifact:
         path = self.find_path(artifact.type, artifact.format, port.types, port.formats)
         if path is None:
             providers = sorted({item.provider for item in self._converters.values()})
@@ -125,6 +135,10 @@ class ConverterRegistry:
         work_dir.mkdir(parents=True, exist_ok=True)
         for converter in path:
             converted = converter.convert(current, work_dir)
+            expected_type = self._result_type(current.type, converter)
+            if converted.type != expected_type:
+                converted = Artifact(expected_type, converted.format, converted.value,
+                                     storage=converted.storage, metadata=dict(converted.metadata))
             converted.provenance = ArtifactProvenance(
                 source_artifact_ids=[current.artifact_id],
                 producing_task=current.provenance.producing_task,
@@ -271,8 +285,26 @@ def _obabel_converter(target_format: str) -> ConvertFunction:
     return convert
 
 
+def _convert_table(target_format: str) -> ConvertFunction:
+    def convert(artifact: Artifact, work_dir: Path) -> Artifact:
+        from rapier.data import load_table, write_rows
+
+        rows = load_table(artifact.path, artifact.format) if artifact.is_file else list(artifact.value)
+        output_path = write_rows(rows, work_dir / f"{artifact.artifact_id}.{target_format}", target_format)
+        return Artifact(artifact.type, target_format, output_path, metadata=dict(artifact.metadata))
+
+    return convert
+
+
 def create_default_converter_registry() -> ConverterRegistry:
     registry = ConverterRegistry()
+    for source in ("csv", "tsv", "json"):
+        for target in ("csv", "tsv", "json"):
+            if source != target:
+                registry.register(ArtifactConverter(
+                    f"core.table.{source}_to_{target}", "table", source, "table", target,
+                    _convert_table(target), 100, provider="core",
+                ))
     for artifact_type in ("sequence.protein", "sequence.dna", "sequence.rna"):
         registry.register(ArtifactConverter(
             f"core.{artifact_type}.inline_to_fasta",
@@ -314,8 +346,11 @@ def create_default_converter_registry() -> ConverterRegistry:
     return registry
 
 
-_default_converter_registry = create_default_converter_registry()
+_default_converter_registry: Optional[ConverterRegistry] = None
 
 
 def get_converter_registry() -> ConverterRegistry:
+    global _default_converter_registry
+    if _default_converter_registry is None:
+        _default_converter_registry = create_default_converter_registry()
     return _default_converter_registry

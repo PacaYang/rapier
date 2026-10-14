@@ -229,14 +229,7 @@ class Pipeline:
             method = None
             if registry.has(method_config.type):
                 method_class = registry.get(method_config.type)
-                method = method_class.from_config({
-                    'name': method_config.id,
-                    'version': config.version or '1.0',
-                    'parameters': method_config.config,
-                    'config': method_config.config,
-                })
-                if getattr(method, 'contract_version', 1) >= 2:
-                    method.normalize_config(method_config.config)
+                method = method_class(name=method_config.id, config=method_config.config)
 
             task = Task(
                 task_id=method_config.id,

@@ -98,9 +98,11 @@ class TestPipelineFromConfig:
 
 
 class TestExecutionEngineDryRun:
-    def test_engine_completes_serial(self, sample_pipeline, tmp_path):
+    def test_engine_completes_serial(self, sample_pipeline, tmp_path, monkeypatch):
         from rapier.engine.executor import ExecutionEngine
 
+        # Tasks without a work_dir run under ./runs; keep that out of the repository.
+        monkeypatch.chdir(tmp_path)
         engine = ExecutionEngine(
             max_parallel=2,
             poll_interval=0,
@@ -111,3 +113,6 @@ class TestExecutionEngineDryRun:
         # In dry-run, the SLURM client reports COMPLETED for every job
         assert result.success
         assert set(result.completed_tasks) == {"filter", "dock", "score"}
+        # Methods without their own command are submitted through the generic runner.
+        script = (tmp_path / "runs" / "dock" / "dock.sh").read_text()
+        assert "-m rapier.methods.runner --task" in script

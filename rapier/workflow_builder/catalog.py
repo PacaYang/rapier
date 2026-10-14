@@ -1,8 +1,11 @@
 """Serialize method, artifact and converter registries for the builder UI.
 
-Socket compatibility is precomputed here with the same rules the pipeline
-validator uses (``PortSpec.accepts`` then ``ConverterRegistry.find_path``) so
-the browser never re-implements the type system.
+Method cards come straight from each :class:`~rapier.core.method.Method`
+subclass's declared ports, config fields, resources and ``ui_hints``; data
+types (and their descriptions) from the :mod:`rapier.data` classes. Socket
+compatibility is precomputed here with the same rules the pipeline validator
+uses (``PortSpec.accepts`` then ``ConverterRegistry.find_path``) so the
+browser never re-implements the type system.
 """
 
 import json
@@ -85,16 +88,20 @@ def _category(method_class: type) -> str:
     return "other"
 
 
+# Class attributes that only rename or describe a registration, not change behaviour.
+_IDENTITY_ATTRS = {
+    "__module__", "__qualname__", "__doc__", "__firstlineno__", "__static_attributes__",
+    "register_name", "display_name",
+}
+
+
 def _alias_of(name: str, method_class: type, registry: MethodRegistry) -> Optional[str]:
     """Name of a registered parent that this class merely re-registers."""
+    if set(method_class.__dict__) - _IDENTITY_ATTRS:
+        return None
     for other in registry.list_available():
         other_class = registry.get(other)
-        if (
-            other != name
-            and other_class is not method_class
-            and issubclass(method_class, other_class)
-            and "__init__" not in method_class.__dict__
-        ):
+        if other != name and other_class is not method_class and issubclass(method_class, other_class):
             return other
     return None
 
@@ -110,7 +117,6 @@ def describe_method(name: str, registry: MethodRegistry) -> Dict[str, Any]:
         "summary": info.get("description", ""),
         "doc": doc,
         "demo": bool(info.get("demo")),
-        "contract_version": info.get("contract_version", 1),
         "alias_of": _alias_of(name, method_class, registry),
         "inputs": [],
         "outputs": [],
@@ -119,11 +125,11 @@ def describe_method(name: str, registry: MethodRegistry) -> Dict[str, Any]:
         "error": None,
     }
     try:
-        method = method_class.from_config({"name": name, "parameters": {}, "config": {}})
+        method = method_class(name=name)
         result["inputs"] = [describe_port(k, v) for k, v in method.input_spec.ports.items()]
         result["outputs"] = [describe_port(k, v) for k, v in method.output_spec.ports.items()]
         # Methods may declare per-field widget hints (e.g. a rule editor) via ``ui_hints``.
-        hints = getattr(method_class, "ui_hints", {}) or {}
+        hints = method.ui_hints or {}
         result["config"] = [
             {**describe_field(k, v), **_json_safe(hints.get(k, {}))}
             for k, v in method.config_spec.fields.items()
@@ -175,7 +181,7 @@ def build_catalog(registry: Optional[MethodRegistry] = None) -> Dict[str, Any]:
     input_ports: Dict[str, PortSpec] = {}
     for name in methods:
         try:
-            method = registry.get(name).from_config({"name": name, "parameters": {}, "config": {}})
+            method = registry.get(name)(name=name)
         except Exception:
             continue
         for port in method.input_spec.ports.values():

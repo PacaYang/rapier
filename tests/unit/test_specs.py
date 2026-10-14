@@ -4,57 +4,80 @@ from pathlib import Path
 
 import pytest
 
-from rapier.core.specs import InputSpec, OutputSpec, EnvironmentSpec, ResourceSpec
+from rapier.core.specs import EnvironmentSpec, InputSpec, OutputSpec, PortSpec, ResourceSpec
+from rapier.data import BindingSite, Molecules, Poses, ProteinStructure
 
 
 class TestInputSpec:
     def test_defaults(self):
         spec = InputSpec()
-        assert spec.required_files == []
-        assert spec.optional_files == []
-        assert spec.parameters == {}
+        assert spec.ports == {}
+        assert spec.required == [] and spec.optional == []
 
-    def test_missing_required_file(self):
-        spec = InputSpec(required_files=["receptor"])
+    def test_ports_accept_data_classes_or_type_strings(self):
+        spec = InputSpec({
+            "receptor": PortSpec(ProteinStructure, "pdb"),
+            "site": PortSpec("binding_site", "box", required=False),
+        })
+        assert spec.ports["receptor"].types == ("structure.protein",)
+        assert spec.ports["site"].data_class is BindingSite
+        assert spec.required == ["receptor"] and spec.optional == ["site"]
+
+    def test_missing_required_port(self):
+        spec = InputSpec({"receptor": PortSpec(ProteinStructure, "pdb")})
         is_valid, errors = spec.validate({})
         assert not is_valid
         assert any("receptor" in e for e in errors)
 
     def test_nonexistent_file(self, tmp_path):
-        spec = InputSpec(required_files=["receptor"])
-        is_valid, errors = spec.validate({"receptor": str(tmp_path / "nope.pdb")})
+        spec = InputSpec({"receptor": PortSpec(ProteinStructure, "pdb")})
+        artifact = ProteinStructure.from_file(tmp_path / "nope.pdb")
+        is_valid, errors = spec.validate({"receptor": artifact})
         assert not is_valid
         assert any("not found" in e for e in errors)
 
     def test_valid_file(self, tmp_path):
         f = tmp_path / "receptor.pdb"
         f.write_text("ATOM\n")
-        spec = InputSpec(required_files=["receptor"])
-        is_valid, errors = spec.validate({"receptor": str(f)})
+        spec = InputSpec({"receptor": PortSpec(ProteinStructure, "pdb")})
+        is_valid, errors = spec.validate({"receptor": ProteinStructure.from_file(f)})
         assert is_valid
         assert errors == []
 
-    def test_required_parameter_missing(self):
-        spec = InputSpec(parameters={"threshold": {"required": True}})
-        is_valid, errors = spec.validate({})
+    def test_raw_paths_and_unknown_ports_are_rejected(self, tmp_path):
+        spec = InputSpec({"receptor": PortSpec(ProteinStructure, "pdb")})
+        is_valid, errors = spec.validate({"receptor": str(tmp_path / "r.pdb"), "extra": 1})
         assert not is_valid
-        assert any("threshold" in e for e in errors)
+        assert any("normalized Artifact" in e for e in errors)
+        assert any("Unknown input port" in e for e in errors)
+
+    def test_wrong_format(self, tmp_path):
+        f = tmp_path / "receptor.cif"
+        f.write_text("data_x\n")
+        spec = InputSpec({"receptor": PortSpec(ProteinStructure, "pdb")})
+        is_valid, errors = spec.validate({"receptor": ProteinStructure.from_file(f)})
+        assert not is_valid
+        assert any("structure.protein/cif" in e for e in errors)
 
 
 class TestOutputSpec:
-    def test_missing_output(self, tmp_path):
-        spec = OutputSpec(files=["results.sdf"])
-        is_valid, errors = spec.validate(tmp_path)
+    def test_missing_output(self):
+        spec = OutputSpec({"results": PortSpec(Molecules, "sdf")})
+        is_valid, errors = spec.validate({})
         assert not is_valid
-        assert any("results.sdf" in e for e in errors)
+        assert any("results" in e for e in errors)
 
     def test_present_output(self, tmp_path):
         (tmp_path / "results.sdf").write_text("data")
-        spec = OutputSpec(files=["results.sdf"])
-        is_valid, errors = spec.validate(tmp_path)
+        spec = OutputSpec({"results": PortSpec(Molecules, "sdf")})
+        is_valid, errors = spec.validate({"results": Molecules.from_file(tmp_path / "results.sdf")})
         assert is_valid
         assert errors == []
 
+    def test_subtype_satisfies_parent_port(self, tmp_path):
+        (tmp_path / "poses.sdf").write_text("data")
+        spec = OutputSpec({"results": PortSpec(Molecules, "sdf")})
+        assert spec.validate({"results": Poses.from_file(tmp_path / "poses.sdf")})[0]
 
 class TestEnvironmentSpec:
     def test_missing_executable(self):

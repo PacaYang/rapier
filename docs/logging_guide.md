@@ -47,6 +47,7 @@ pipeline_logger.log_pipeline_complete(execution_result)
 ### Task Logging
 
 ```python
+from rapier.core.enums import TaskStatus
 from rapier.logging import TaskLogger
 
 # Create task logger
@@ -96,10 +97,9 @@ slurm_logger.log_resource_usage(
 ### CLI Monitor (Terminal)
 
 ```python
-from rapier.logging import CLIMonitor
-from rapier.logging.alerts import ExecutionState
+from rapier.logging import CLIMonitor, ExecutionState
 
-# Create CLI monitor
+# Create CLI monitor (falls back to plain text if `rich` isn't installed)
 monitor = CLIMonitor(use_colors=True, use_rich=True)
 
 # Display pipeline progress
@@ -110,10 +110,10 @@ state.tasks_running = 2
 
 monitor.display_progress(pipeline, state)
 
-# Display task list
-monitor.display_task_list(pipeline.tasks)
+# Display task list (pipeline.tasks is a dict, so pass its values)
+monitor.display_task_list(list(pipeline.tasks.values()))
 
-# Display logs for a task
+# Display logs for a task (reads the directory given to initialize_logging)
 monitor.display_logs(task_id='dock_001', follow=False)
 
 # Print status messages
@@ -124,17 +124,22 @@ monitor.print_status_line("Error: Job failed", status='error')
 
 ### Web Dashboard
 
+Requires `pip install flask flask-cors`. The page is served from the repo's
+`templates/dashboard.html`, so run it from a source checkout. The server has no
+authentication; keep the default `host='localhost'` unless you're on a trusted
+network.
+
 ```python
 from rapier.logging import Dashboard
 
 # Create dashboard
-dashboard = Dashboard(host='0.0.0.0', port=8080, log_dir='/path/to/logs')
+dashboard = Dashboard(host='localhost', port=8080, log_dir='/path/to/logs')
 
 # Start dashboard server (runs in background)
 dashboard.start()
 
-# Update dashboard with current status
-pipeline_data = dashboard.format_pipeline_data(pipeline, state, tasks)
+# Update dashboard with current status (tasks defaults to pipeline.tasks)
+pipeline_data = dashboard.format_pipeline_data(pipeline, state)
 dashboard.update_status(pipeline_data)
 
 # Get snapshot
@@ -144,15 +149,16 @@ snapshot = dashboard.get_snapshot()
 dashboard.stop()
 ```
 
-Access the dashboard in your browser at `http://localhost:8080`
+Access the dashboard in your browser at `http://localhost:8080`. JSON is
+available at `/api/status` and `/api/pipeline/<pipeline_id>`.
 
 ### WebSocket Dashboard (Real-time Updates)
 
 ```python
 from rapier.logging import DashboardWithWebSocket
 
-# Requires: pip install flask-socketio
-dashboard = DashboardWithWebSocket(host='0.0.0.0', port=8080)
+# Requires: pip install flask flask-socketio (falls back to Dashboard without it)
+dashboard = DashboardWithWebSocket(host='localhost', port=8080)
 dashboard.start()
 
 # Updates are pushed automatically via WebSocket
@@ -176,7 +182,7 @@ is_growing = monitor.check_file_growth(
     stall_threshold_seconds=300
 )
 
-# Validate file format
+# Validate file format ('sdf', 'pdb', 'csv', 'json', or 'txt')
 is_valid = monitor.validate_file_format('/path/to/output.sdf', format='sdf')
 
 # Get file info
@@ -210,16 +216,20 @@ timeline = aggregator.get_timeline(pipeline_id='my_pipeline')
 
 # Get summary statistics
 summary = aggregator.get_summary()
-# Returns: {'total_entries': 1234, 'by_level': {...}, 'by_component': {...}}
+# Returns: {'total_entries': 1234, 'by_level': {...}, 'by_component': {...}, 'log_files': 5}
 ```
 
 ## Alert System
 
-```python
-from rapier.logging import AlertManager, AlertLevel
-from rapier.logging.alerts import ExecutionState
+`AlertManager` registers three default conditions: `task_failure`,
+`high_failure_rate` (over 50% of finished tasks failed), and `no_progress`
+(nothing completed or running after 10 minutes). Message templates can use
+`{pipeline_id}`, `{tasks_completed}`, `{tasks_failed}`, and `{failure_rate}`.
 
-alert_manager = AlertManager(log_dir='/path/to/logs')
+```python
+from rapier.logging import AlertManager, AlertLevel, ExecutionState
+
+alert_manager = AlertManager()
 
 # Register custom alert condition
 alert_manager.register_alert(
@@ -232,7 +242,8 @@ alert_manager.register_alert(
     cooldown_seconds=600
 )
 
-# Add notification handlers
+# Add notification handlers (webhook_handler needs `requests`;
+# email_handler(smtp_config) sends ERROR/CRITICAL alerts over SMTP)
 from rapier.logging.alerts import log_file_handler, webhook_handler
 
 alert_manager.add_notification_method(
@@ -265,8 +276,8 @@ The logging system creates these files:
 
 ```
 /path/to/logs/
-├── rapier.log                           # Main system log (all components)
-├── pipeline_<pipeline_id>.log           # Pipeline structured logs (JSON)
+├── rapier.log                           # Main system log (all components; JSON when structured=True)
+├── pipeline_<pipeline_id>.log           # Pipeline events (JSON lines: timestamp, pipeline_id, event, data)
 ├── pipeline_<pipeline_id>_summary.txt   # Pipeline human-readable summary
 ├── task_<task_id>.log                   # Task execution logs (JSON)
 ├── task_<task_id>_error.log             # Task error logs (if errors occurred)
@@ -276,6 +287,9 @@ The logging system creates these files:
 ## Log Entry Format
 
 ### Structured (JSON) Format
+
+Entries in `rapier.log` look like this (the per-pipeline, task, and SLURM files
+use the same `timestamp`/`event`/`data` keys without `component`/`message`):
 
 ```json
 {
@@ -340,7 +354,7 @@ cat /path/to/logs/rapier.log | jq -r '.event' | sort | uniq -c
 - Disable console: `console: False`
 
 ### Dashboard won't start
-- Install Flask: `pip install flask flask-cors`
+- Install Flask: `pip install flask flask-cors` (or `flask-socketio` for `DashboardWithWebSocket`)
 - Check port is not in use: `lsof -i :8080`
 - Check firewall settings
 

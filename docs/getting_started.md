@@ -46,6 +46,9 @@ methods:
 This pipeline has one method: a `ligand_filter` that keeps molecules with a
 molecular weight at or below 500.
 
+Relative `source` paths are resolved against the directory containing the YAML
+file, and the validator checks that they exist.
+
 ## 2. Create your first pipeline
 
 Save the YAML above as `my_pipeline.yaml`. Or start from a shipped example:
@@ -53,6 +56,10 @@ Save the YAML above as `my_pipeline.yaml`. Or start from a shipped example:
 ```bash
 cp examples/pipelines/01_ligand_filtering.yaml my_pipeline.yaml
 ```
+
+Prefer a visual editor? Run `python -m rapier.workflow_builder` (needs
+`pip install -e ".[ui]"`), build the graph in the browser, and use *Export
+YAML*. The *Example* menu opens every file in `examples/pipelines/`.
 
 ## 3. Validate it
 
@@ -141,7 +148,21 @@ result = engine.execute(pipeline)
 print(result.generate_report())
 ```
 
-Set `dry_run=False` on a SLURM-equipped machine to submit real jobs.
+Set `dry_run=False` on a SLURM-equipped machine to submit real jobs. Each job
+runs the method through `python -m rapier.methods.runner` (Vina and Boltz-2
+use their own runners) and writes its typed outputs to the task's `outputs/`
+directory. A dry run executes nothing, so here `filter` "completes" without
+outputs and `search`, which is bound to `filter.filtered_ligands`, fails.
+To try a method without a cluster, run it directly:
+
+```python
+from rapier import Task
+from rapier.methods import LigandFilter
+
+task = Task("filter", LigandFilter(config={"mw_max": 500}), inputs={"ligands": "ligands.sdf"})
+print(task.method.execute(task), task.error_message)   # TaskStatus.COMPLETED None
+print(task.outputs["properties"].path)                  # runs/filter/outputs/properties.csv
+```
 
 ## 6. Understand the outputs
 
@@ -164,7 +185,9 @@ print(result.get_task_result("filter").outputs)
 
 ## Next steps
 
-- [Pipeline Configuration Reference](pipeline_configuration.md) — every option explained
+- [Example pipelines](../examples/pipelines/) — filtering, docking, pooling, Boltz-2, and a `molecule_filter` funnel
+- [Pipeline Configuration](pipeline_configuration.md) and [Config Reference](config_reference.md) — every option explained
 - [Method Reference](method_reference.md) — all built-in methods
 - [Method Development Guide](method_development_guide.md) — write your own methods
+- [Logging Guide](logging_guide.md) — logs, monitors, and alerts
 - [Architecture](architecture.md) — how the platform works under the hood

@@ -11,7 +11,7 @@ import importlib
 import inspect
 import pkgutil
 
-from ..core.base_method import BaseMethod
+from ..core.method import Method
 
 
 class MethodRegistry:
@@ -40,21 +40,21 @@ class MethodRegistry:
     def __init__(self):
         """Initialize the registry (only once due to singleton)."""
         if not MethodRegistry._initialized:
-            self._methods: Dict[str, Type[BaseMethod]] = {}
+            self._methods: Dict[str, Type[Method]] = {}
             self._method_info: Dict[str, Dict[str, Any]] = {}
             MethodRegistry._initialized = True
 
     def register(
         self,
         name: str,
-        method_class: Type[BaseMethod],
+        method_class: Type[Method],
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """Register a method with the registry.
 
         Args:
             name: Unique identifier for the method
-            method_class: The method class (must inherit from BaseMethod)
+            method_class: The method class (must inherit from Method)
             metadata: Optional metadata about the method
 
         Raises:
@@ -63,9 +63,9 @@ class MethodRegistry:
         if name in self._methods:
             raise ValueError(f"Method '{name}' is already registered")
 
-        if not issubclass(method_class, BaseMethod):
+        if not issubclass(method_class, Method):
             raise ValueError(
-                f"Method class must inherit from BaseMethod, got {method_class}"
+                f"Method class must inherit from Method, got {method_class}"
             )
 
         self._methods[name] = method_class
@@ -92,7 +92,7 @@ class MethodRegistry:
         del self._methods[name]
         del self._method_info[name]
 
-    def get(self, name: str) -> Type[BaseMethod]:
+    def get(self, name: str) -> Type[Method]:
         """Get a method class by name.
 
         Args:
@@ -151,7 +151,6 @@ class MethodRegistry:
         # Add class-level information
         info['class'] = method_class.__name__
         info['module'] = method_class.__module__
-        info['contract_version'] = getattr(method_class, 'contract_version', 1)
 
         return info
 
@@ -167,7 +166,7 @@ class MethodRegistry:
         """Automatically discover and register methods in the methods package.
 
         This walks through the rapier.methods package and its subpackages,
-        looking for classes that inherit from BaseMethod and have a
+        looking for classes that inherit from Method and have a
         `register_name` class attribute.
 
         Args:
@@ -180,7 +179,7 @@ class MethodRegistry:
         Example:
             Method classes can opt into auto-discovery:
 
-            class MyMethod(BaseMethod):
+            class MyMethod(Method):
                 register_name = "my_method"  # Will be auto-registered
         """
         discovered_count = 0
@@ -205,14 +204,14 @@ class MethodRegistry:
             try:
                 module = importlib.import_module(modname)
 
-                # Look for BaseMethod subclasses with register_name
+                # Look for Method subclasses with register_name
                 for name, obj in inspect.getmembers(module, inspect.isclass):
-                    # Skip BaseMethod itself
-                    if obj is BaseMethod:
+                    # Skip Method itself
+                    if obj is Method:
                         continue
 
-                    # Check if it's a BaseMethod subclass
-                    if issubclass(obj, BaseMethod):
+                    # Check if it's a Method subclass
+                    if issubclass(obj, Method):
                         # Check for register_name attribute
                         register_name = getattr(obj, 'register_name', None)
                         if register_name and not self.has(register_name):
