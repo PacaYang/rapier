@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from rapier.artifacts import artifact_from_data, artifact_to_data
 from rapier.core.enums import TaskStatus
+from rapier.core.method import OUTPUT_VALIDATION_VERSION
 
 OUTPUTS_FILE = "outputs.json"
 
@@ -26,6 +27,9 @@ def write_task_file(method: Any, task: Any) -> Path:
     work_dir = Path(task.work_dir or (Path.cwd() / "runs" / task.task_id)).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     task.work_dir = work_dir
+    task.outputs = {}
+    task.error_message = None
+    task.metadata.pop("output_validation_version", None)
     stale = work_dir / "outputs" / OUTPUTS_FILE
     if stale.exists():
         stale.unlink()
@@ -60,10 +64,20 @@ def read_outputs(task: Any) -> Dict[str, Any]:
         payload = json.loads(path.read_text())
         if payload.get("status") != "completed":
             raise RuntimeError(payload.get("error") or "Method run failed")
-        return artifact_from_data(payload["outputs"])
-    if task.outputs:
-        return task.outputs
-    raise FileNotFoundError(f"No {OUTPUTS_FILE} for task '{task.task_id}'; did the job run?")
+        if payload.get("validation_version") != OUTPUT_VALIDATION_VERSION:
+            raise RuntimeError("Output receipt has no supported pooled validation version; rerun this task")
+        if payload.get("task_id") != task.task_id:
+            raise RuntimeError("Output receipt belongs to a different task; rerun this task")
+        outputs = artifact_from_data(payload["outputs"])
+    elif task.metadata.get("output_validation_version") == OUTPUT_VALIDATION_VERSION:
+        outputs = task.outputs
+    else:
+        raise FileNotFoundError(f"No validated {OUTPUTS_FILE} for task '{task.task_id}'; did the job run?")
+    if task.method:
+        valid, errors = task.method.output_spec.validate(outputs)
+        if not valid:
+            raise ValueError("Collected outputs are invalid: " + "; ".join(errors))
+    return outputs
 
 
 def run_task_file(path: Path) -> Dict[str, Any]:
@@ -80,10 +94,17 @@ def run_task_file(path: Path) -> Dict[str, Any]:
     if payload.get("input_dir"):
         task.input_dir = Path(payload["input_dir"])
     status = method.execute(task)
+    if (status == TaskStatus.COMPLETED
+            and task.metadata.get("output_validation_version") != OUTPUT_VALIDATION_VERSION):
+        status = TaskStatus.FAILED
+        task.outputs = {}
+        task.error_message = "Method execution bypassed pooled output validation; implement run() instead of execute()"
     result = {
         "status": "completed" if status == TaskStatus.COMPLETED else "failed",
         "error": task.error_message,
         "outputs": artifact_to_data(task.outputs),
+        "task_id": task.task_id,
+        "validation_version": (OUTPUT_VALIDATION_VERSION if status == TaskStatus.COMPLETED else None),
     }
     output_path = task.work_dir / "outputs" / OUTPUTS_FILE
     output_path.parent.mkdir(parents=True, exist_ok=True)

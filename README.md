@@ -87,8 +87,11 @@ print(result.generate_report())
 
 A dry run submits nothing and produces no outputs, so it checks scheduling
 and scripts; `search` above fails there because `filter` has no
-`filtered_ligands`. With `dry_run=False`, each job runs its method on the
-compute node (most through `python -m rapier.methods.runner`).
+`filtered_ligands`. With `dry_run=False`, every built-in method runs on the
+compute node through `python -m rapier.methods.runner`. After environment
+activation, the method checks its dependencies before execution and validates
+all collected output ports together afterward. Missing or inconsistent results
+fail the task before downstream work can start.
 
 See the [Getting Started guide](docs/getting_started.md) for a full walkthrough.
 
@@ -247,17 +250,6 @@ rapier/
 └── pyproject.toml             # Package configuration
 ```
 
-## Development Roadmap
-
-- [x] **Stage 1**: Core Architecture & Data Models
-- [x] **Stage 2**: Pipeline Configuration System (YAML parsing)
-- [x] **Stage 3**: SLURM Integration Layer
-- [x] **Stage 4**: Dependency & Execution Engine
-- [x] **Stage 5**: Logging & Monitoring System
-- [x] **Stage 6**: File Management & Project Structure
-- [x] **Stage 7**: Method Library & Examples
-- [x] **Stage 8**: Testing & Documentation
-
 ## Requirements
 
 - Python 3.8+
@@ -266,12 +258,5 @@ rapier/
 - Flask (optional, for the workflow builder)
 - RDKit, AutoDock Vina, Meeko, Boltz-2, Smina, Open Babel (for specific methods)
 
-## License
-
-[To be determined]
-
-## Contributing
-
-Contributions are welcome. Please ensure the test suite passes
 (`scripts/run_tests.sh`) and add tests for new functionality. See the
 [Method Development Guide](docs/method_development_guide.md) to add new methods.

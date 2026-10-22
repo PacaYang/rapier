@@ -29,7 +29,7 @@ A **method** in Rapier represents a screening algorithm or computational workflo
 - **Environment**: what software dependencies are required
 - **Resources**: what computational resources (CPU, memory, time) are needed
 
-You implement one function, `run(inputs, ctx) -> {port: value}`. The base class wraps raw inputs as each port's data class, converts and stages them, validates them, and turns whatever `run` returns into typed, validated output artifacts with provenance. The platform handles scheduling, dependency management, and result tracking.
+Implement three functions after examining the method's input and output contracts: `check_dependencies(inputs, ctx) -> List[str]`, `run(inputs, ctx) -> {port: value}`, and `validate_outputs(inputs, outputs, ctx) -> List[str]`. The base class wraps, converts and stages inputs, checks execution prerequisites, and pools the normalized outputs before invoking your semantic validator once. The platform handles scheduling, workflow dependency management, and result tracking.
 
 ## Method Lifecycle
 
@@ -38,13 +38,21 @@ For each task, the engine:
 1. **Instantiates** the method as `method_class(name=<method id>, config=<config>)`. The constructor runs `migrate_config`, then validates the config strictly. The pipeline validator builds every method the same way ahead of time, so config errors surface at validation.
 2. **Resolves bindings**: `InputResolver` looks up each bound `pipeline.<name>` or `<method>.<port>` value.
 3. **Formats inputs** with `format_inputs`: each value is wrapped as the port's data class, validated, converted to a format the port accepts, and staged (symlinked or copied) into `<work_dir>/input/normalized/`.
-4. **Validates** with `validate_inputs` (port contract, `validate_bindings`, then your `check_inputs`) and `validate_environment()`.
-5. **Submits** `get_command(task)` as the body of the SLURM script. By default this is the generic runner, which calls `execute(task)` on the compute node (see [Running on SLURM](#running-on-slurm)).
-6. **Collects** outputs with `collect_outputs(task)` once the job has finished. This is skipped in dry runs, which execute nothing.
+4. **Validates inputs** with `validate_inputs` (port contract, `validate_bindings`, then your `check_inputs`). Task preparation does not require the submission host to have the scientific software installed.
+5. **Submits** `get_command(task)` as the body of the SLURM script. All built-in methods use the generic runner, which calls `execute(task)` after the job's environment has been activated (see [Running on SLURM](#running-on-slurm)).
+6. **Collects** the validated outputs with `collect_outputs(task)` once the job has finished. A scheduler success with missing or invalid output receipts fails the task and does not release downstream tasks. Collection is skipped in dry runs, which execute nothing.
 
-`execute(task)` is the in-process path, used by the generic runner, tests and local runs: `format_inputs` → `validate_inputs` → `run` → `format_outputs`, with the result stored in `task.outputs`. Any exception fails the task with `"<display_name> failed: <message>"`. Raise `MethodError` for an expected, user-facing failure.
+`execute(task)` is the common path for the generic runner and local runs:
 
-You must implement `run`. Override `check_config`, `migrate_config`, `validate_bindings`, `check_inputs` or `validate_environment` when the defaults aren't enough, and `get_command` / `collect_outputs` only when the method needs its own job runner.
+1. Format and structurally validate inputs.
+2. Collect errors from `validate_environment()` and `check_dependencies(inputs, ctx)` on the execution host. Skip `run` if either check fails.
+3. Execute `run`, then normalize every independent output port best-effort into one mapping, retaining readable artifacts and collecting structural, file and parsing errors.
+4. Invoke `validate_outputs(inputs, pooled_outputs, ctx)` exactly once. It receives the entire mapping even if other ports failed normalization, so missing outputs must be handled with `.get()` or guarded access.
+5. Combine all collection, structural and semantic errors. Publish `task.outputs` and report `COMPLETED` only when none remain.
+
+Return all discoverable errors from the two hooks instead of raising on the first bad record. An execution exception still fails the task; raise `MethodError` for an expected, user-facing failure.
+
+Registered methods must implement `run` and resolve concrete implementations of both new hooks. `Method` provides empty hook defaults for unregistered helpers, but registration rejects those defaults. Implementations inherited from an intermediate base class are valid. Override `check_config`, `migrate_config`, `validate_bindings`, `check_inputs` or `validate_environment` when needed; keep scheduling on the generic runner so every execution uses the same validation lifecycle.
 
 ## The Method Class
 
@@ -69,10 +77,12 @@ and overrides any of these hooks:
 | `check_config(config)` | after per-field validation | list of cross-field errors |
 | `validate_bindings(bound_ports)` | by the pipeline validator and `validate_inputs` | list of errors for config-dependent ports |
 | `check_inputs(inputs)` | after the port contract passes | list of content errors |
+| `check_dependencies(inputs, ctx)` | on the execution host, before `run` | all method-specific prerequisite errors (required for registration) |
+| `validate_outputs(inputs, outputs, ctx)` | once after collecting and normalizing every output port | all semantic and cross-port errors (required for registration) |
 
 The constructor is `Method(name=None, config=None, *, version=None, parameters=None)`. `name` is the pipeline method id (default `register_name`). `parameters` is an alias of `config`, and passing both is an error. The instance exposes `config` (normalized), `input_spec`, `output_spec`, `config_spec`, `resource_spec` and `env_requirements`.
 
-`run` receives the formatted inputs (data-class instances, or lists of them for `many` ports) and a `RunContext` with `task`, `work_dir`, `input_dir`, `output_dir` (`<work_dir>/outputs`, where `run` should write) and `resources` (the task's resource request).
+The hooks and `run` receive formatted inputs (data-class instances, or lists for `many` ports) and a `RunContext` with `task`, `work_dir`, `input_dir`, `output_dir` (`<work_dir>/outputs`, where `run` should write), `resources` (the task's resource request), and `output_errors`. Specialized result collectors append independent report/parsing errors to `ctx.output_errors` while continuing to gather unrelated artifacts.
 
 ### ParallelizableMethod (mixin)
 
@@ -88,6 +98,7 @@ Here's a complete molecular weight filter:
 
 ```python
 from typing import Any, Dict, List
+from collections import Counter
 
 from rapier import (ConfigField, EnvironmentSpec, Method, MethodError, Molecules,
                     PortSpec, ResourceSpec, RunContext, Scores)
@@ -120,16 +131,53 @@ class MolecularWeightFilter(Method):
             return ["mw_min cannot be greater than mw_max"]
         return []
 
+    def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        try:
+            return [] if inputs["molecules"].records() else ["No input molecules"]
+        except (OSError, ValueError) as exc:
+            return [f"Cannot read molecules: {exc}"]
+
+    def validate_outputs(self, inputs: Dict[str, Any], outputs: Dict[str, Any],
+                         ctx: RunContext) -> List[str]:
+        errors, pooled = [], {}
+        for port, reader in (("filtered", lambda value: value.records()),
+                             ("properties", lambda value: value.rows())):
+            try:
+                pooled[port] = reader(outputs[port])
+            except (KeyError, AttributeError, OSError, ValueError) as exc:
+                errors.append(f"Cannot read {port}: {exc}")
+        if "properties" in pooled:
+            rows = pooled["properties"]
+            expected = Counter((record.id, record.pose) for record in inputs["molecules"].records())
+            actual, passed = Counter(), Counter()
+            for number, row in enumerate(rows, 1):
+                try:
+                    actual[(str(row["id"]), int(row["occurrence"]))] += 1
+                    if str(row["passed"]).lower() not in ("true", "false"):
+                        raise ValueError("invalid passed flag")
+                    if str(row["passed"]).lower() == "true":
+                        passed[str(row["id"])] += 1
+                except (KeyError, TypeError, ValueError) as exc:
+                    errors.append(f"Invalid property row {number}: {exc}")
+            if actual != expected:
+                errors.append("Properties must cover every input occurrence")
+            if "filtered" in pooled and Counter(record.id for record in pooled["filtered"]) != passed:
+                errors.append("Filtered molecules must match passing property rows")
+        return errors
+
     def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         from rdkit.Chem import Descriptors
 
         rows, kept = [], []
         for record, mol in rdkit_molecules(inputs["molecules"]):  # (MoleculeRecord, Mol or None)
             if mol is None:
+                rows.append({"id": record.id, "occurrence": record.pose,
+                             "mw": None, "passed": False})
                 continue
             mw = Descriptors.MolWt(mol)
             passed = self.config["mw_min"] <= mw <= self.config["mw_max"]
-            rows.append({"id": record.id, "mw": round(mw, 3), "passed": passed})
+            rows.append({"id": record.id, "occurrence": record.pose,
+                         "mw": round(mw, 3), "passed": passed})
             if passed:
                 kept.append(mol)
         if not rows:
@@ -175,7 +223,47 @@ Types are stored as type strings, and `port.data_class` is the first one's class
 
 **Inputs.** `format_inputs` wraps raw values with `port.coerce`: a path becomes a file artifact (format from its suffix), a SMILES string or list of strings becomes inline `smiles`, a `{center, size}` dict becomes a `box`, and an artifact passes through. It then validates the value, converts it if the format doesn't match (for example SMILES → SDF with RDKit), and stages it. `run` can therefore assume every input already matches its port.
 
-**Outputs.** `format_outputs` wraps each returned value as its output port's class: an artifact passes through, a path becomes a file artifact, a list of row dicts becomes a `Table`/`Scores` file named after the port, and a dict becomes a JSON `Report` (or an inline box for a `BindingSite` port). It then checks required ports, cardinality, type/format and file existence, adds provenance (producing task, output port, conversions), and rejects undeclared ports.
+**Outputs.** `format_outputs` is a public structural helper: artifacts pass through, paths become file artifacts, row dictionaries become `Table`/`Scores` files, and dictionaries become JSON `Report`s (or inline boxes for `BindingSite`). It checks required ports, cardinality, type/format and file existence, adds provenance, and rejects undeclared ports. It does not invoke the child semantic validator. `execute` uses the same normalization rules best-effort across all ports, then passes the complete pooled mapping to `validate_outputs` once.
+
+The filename `<work_dir>/outputs/outputs.json` is reserved for the scheduler validation receipt. A report port named `outputs` is materialized as `outputs_artifact.json`; explicitly returning an artifact at the reserved receipt path fails validation. If a singleton port incorrectly returns multiple artifacts, the pooled validator receives that list so it can inspect each artifact alongside the cardinality errors.
+
+For pooled table checks, use `rows, row_errors = artifact.rows_with_errors()`, append `row_errors` to the aggregate errors, and inspect every returned row. This reader retains valid JSON object rows when sibling entries are malformed. Ordinary `artifact.rows()` remains strict and raises when any row cannot be read.
+
+**Pooled semantic validation.** Compare identities, counts, rows, reports and cross-port relationships together. Missing files or malformed reports in one port must not prevent checking other ports. Do not call the validator once per record or once per port, or reuse the workflow `ResultPooler`: pooling here means all outputs of one method execution. A validator should collect independent errors into one `List[str]`.
+
+Design both hooks from the method's contracts when adding a method. `check_dependencies` covers readable input contents, conditional bindings, tools and prerequisites for requested outputs. DAG dependencies control upstream task ordering and remain separate. `validate_outputs` covers the expected result inventory, duplicate or unexpected records, finite numeric values, and relationships between files and reports. Intentional exclusions, partial failures and truncated results need explicit per-input outcome metadata; empty results are valid only when the method permits them. Use occurrence-aware keys for duplicate input IDs, retaining the display ID and adding deterministic occurrence metadata or suffixes. Ligand preparation, for example, records `successful_molecules` and `failed_molecules` with `(id, occurrence)` keys and writes `rapier_input_occurrence` into each prepared SDF record.
+
+**Predicted binding sites.** A method that declares a `predicted_structures`
+output can call `self.extract_binding_sites(outputs)` from `run`, passing the
+raw output mapping (normalized file-backed artifacts are accepted as well).
+The helper reads PDB or mmCIF files with the optional Gemmi dependency and
+returns one plain record per ligand residue and model. Each record contains the
+structure path, model id, ligand identity, and protein residue identities. A
+protein residue is included when any of its heavy atoms is strictly less than
+5 Å from a ligand heavy atom; hydrogen-only contacts and a distance of exactly
+5 Å do not count. Water, ions, buffer residues, DNA, and RNA are excluded as
+ligands. Every processed model must contain both a peptide protein and at least
+one molecular ligand. Install Gemmi with `pip install gemmi` when using this
+helper.
+
+The returned records have the following shape (one record per ligand residue):
+
+```python
+{
+    "structure": "/path/to/prediction.cif",
+    "model": "1",
+    "ligand": {
+        "chain_id": "B", "residue_name": "LIG",
+        "residue_number": 1, "insertion_code": "",
+    },
+    "residues": [
+        {
+            "chain_id": "A", "residue_name": "TYR",
+            "residue_number": 42, "insertion_code": "",
+        },
+    ],
+}
+```
 
 ## Configuration Schema
 
@@ -242,7 +330,7 @@ environment = EnvironmentSpec(
 )
 ```
 
-The default `validate_environment()` checks `executables` and `python_packages`, and `TaskRunner.prepare_task` calls it before submitting. The check runs on the machine that submits the job, not on the compute node. `modules`, `conda_env` and `env_variables` are not applied; SLURM scripts take `modules`, `conda_env` and `env_vars` from task metadata. Override `validate_environment()` for checks the spec can't express or for friendlier messages, as `vina_docking` does:
+The default `validate_environment()` checks `executables` and `python_packages`. `Method.execute` calls it alongside `check_dependencies` on the execution host, after the scheduler activates the configured environment. Task preparation performs structural input checks without requiring the submission host to have those tools. The descriptive `EnvironmentSpec.modules`, `conda_env` and `env_variables` fields are not applied themselves; SLURM scripts take `modules`, `conda_env` and `env_vars` from task metadata. Override `validate_environment()` for checks the spec cannot express or for friendlier messages, as `vina_docking` does:
 
 ```python
 def validate_environment(self) -> Tuple[bool, List[str]]:
@@ -283,21 +371,15 @@ resources = ResourceSpec(
 
 ## Running on SLURM
 
-The task runner submits `get_command(task)` as the job body. Every method gets a working default from the generic runner (`rapier.methods.runner`), so a method that only implements `run` executes on SLURM exactly as it does locally:
+The task runner submits `get_command(task)` as the job body. All built-in methods use the generic runner (`rapier.methods.runner`) so their dependency checks, execution and pooled validation are the same on SLURM and locally:
 
 1. `get_command(task)` writes `<work_dir>/task.json` (method module and class, step name, config, the already-staged inputs, resources) and returns `<python> -m rapier.methods.runner --task <work_dir>/task.json`, using the submitting interpreter's absolute path.
-2. The job rebuilds the method from its import path, runs the same `execute(task)` and writes the status, error and formatted outputs to `<work_dir>/outputs/outputs.json`. A failed run exits non-zero, so SLURM reports the job as failed.
-3. `collect_outputs(task)` reads `outputs.json` back, raising the recorded error if the run failed. Without the file it returns `task.outputs` from a local `execute`.
+2. The job rebuilds the method from its import path, runs `execute(task)` and writes status, error and outputs to `<work_dir>/outputs/outputs.json`. A successful receipt includes `validation_version: 1`, proving that pooled validation completed. Failed execution exits nonzero.
+3. `collect_outputs(task)` accepts only completed receipts with the current validation version. Legacy receipts must be rerun. Validated outputs from a local `execute` can be collected in memory. Fresh attempts remove stale receipts before execution.
 
 Because the job imports the method by module path, define it in an importable module (not `__main__` or a notebook), and make the same Python path and packages available on the compute nodes.
 
-Override the pair when a method needs its own job runner, as `vina_docking` and `boltz2` do with manifest runners:
-
-1. `get_command(task)` calls `self.format_inputs(task.inputs, ctx.input_dir)` (with `ctx = RunContext.for_task(task)`), writes a JSON manifest (inputs, config, work dir) into `task.work_dir`, and returns `python -m your.runner_module --manifest <path>`.
-2. `run(inputs, ctx)` writes the same manifest and calls the runner in-process, so local and SLURM runs are identical.
-3. `collect_outputs(task)` reads the files the runner wrote under `outputs/` and returns `self.format_outputs({...}, ctx)`.
-
-Keep the runner module importable without RDKit or other heavy dependencies where you can, and write a summary JSON so `collect_outputs` can report partial failures through artifact metadata.
+Vina and Boltz2 keep their specialized manifest helpers inside `run`; their scheduler commands and output collection use the common runner and validation receipt. New methods should follow the same pattern. Keep manifest helpers importable without heavy optional dependencies where possible, retain a summary for partial failures, and append independent collection errors to `ctx.output_errors` while gathering the remaining ports.
 
 ## Parallelizable and Checkpointable Methods
 
@@ -339,7 +421,7 @@ def test_execute(tmp_path):
     assert task.outputs["filtered"].ids() == ["ethanol"]
 ```
 
-`execute` has already validated the outputs against the output ports. Mark tests that need optional tools with the markers in `pyproject.toml` (`rdkit`, `vina`, `slurm`, `boltz2_vina`) so they can be skipped where the tool is absent.
+`execute` has already checked output ports and run pooled semantic validation. Test multiple dependency errors preventing `run`, one validator call with the complete output mapping, independent malformed/missing outputs reported together, cross-port inconsistencies, explicit partial failures, valid empty results and duplicate input occurrences. Mock external tools and their availability together. Mark tests needing optional tools with the markers in `pyproject.toml` (`rdkit`, `vina`, `slurm`, `boltz2_vina`).
 
 ### Pipeline Validation
 
@@ -362,7 +444,7 @@ class MyMethod(Method):
     register_name = "my_method"  # Used as `type:` in pipeline configs
 ```
 
-`MethodRegistry.auto_discover()` imports every module under `rapier.methods` and registers each `Method` subclass with a `register_name`. It only scans that package, so a method outside it must be registered manually. Import errors are printed as warnings and skipped.
+`MethodRegistry.auto_discover()` imports every module under `rapier.methods` and registers each valid `Method` subclass with a `register_name`. It only scans that package, so a method outside it must be registered manually. Import and registration failures are reported as warnings; missing-hook warnings identify the class and hook.
 
 ### Manual Registration
 
@@ -377,7 +459,7 @@ registry.register('my_method', MyMethod, metadata={
 })
 ```
 
-`register` raises if the name is taken or the class is not a `Method` subclass. `get_info(name)` returns the metadata plus `class` and `module`; when no description is given, the first line of the class docstring is used.
+`register` raises if the name is taken, the class is not a `Method` subclass, or either `check_dependencies` or `validate_outputs` is missing, non-callable, or resolves to the empty `Method` default. It resolves the complete MRO, so concrete hooks inherited from intermediate bases and aliases such as `Boltz2PredictionMethod` are accepted. Registration verifies that authored hooks exist; authors must design their checks by examining the method's inputs, outputs and configuration. `get_info(name)` returns metadata plus `class` and `module`; the first class-docstring line is the default description.
 
 ### Using in Pipelines
 
@@ -409,11 +491,11 @@ methods:
 
 ## Migrating Older Methods
 
-`BaseMethod`, `SingleStepMethod`, `MultiStepMethod`/`MethodStep`, `contract_version`, `from_config`, `normalize_config` and the file-list `InputSpec(required_files=...)` / `OutputSpec(files=...)` forms have been removed. To port a method: subclass `Method`; move the specs into the `inputs`/`outputs`/`config_fields`/`resources`/`environment` class attributes; move the body of `execute` (or of every step) into `run`, returning `{port: value}` instead of setting `task.outputs`; and move content checks from `validate_inputs` into `check_inputs`. Score tables should use `id`/`pose` keys (readers still accept `ligand`/`mode`).
+`BaseMethod`, `SingleStepMethod`, `MultiStepMethod`/`MethodStep`, `contract_version`, `from_config`, `normalize_config` and the file-list `InputSpec(required_files=...)` / `OutputSpec(files=...)` forms have been removed. To port a method: subclass `Method`; move the specs into the `inputs`/`outputs`/`config_fields`/`resources`/`environment` class attributes; move execution into `run`, returning `{port: value}` instead of setting `task.outputs`; move execution prerequisites into `check_dependencies`; and implement `validate_outputs` to compare the complete pooled result inventory. Lightweight content checks may remain in `check_inputs`. Registration now rejects methods that retain either empty base hook. Score tables should use `id`/`pose` keys (readers still accept `ligand`/`mode`), with occurrence metadata where duplicate input IDs need disambiguation.
 
 ## Best Practices
 
-1. **Validate Early**: Put content checks in `check_inputs` so they run before heavy computation
+1. **Validate Prerequisites**: Put execution-host content and software prerequisites in `check_dependencies`; lightweight `check_inputs` checks also run during staging
 2. **Use Temp Directories**: Write intermediate files to `ctx.work_dir / "temp"`
 3. **Handle Errors Gracefully**: Raise `MethodError` with a clear message; partial per-molecule failures belong in a report
 4. **Log Progress**: Use print statements or logging—they appear in SLURM logs
@@ -421,6 +503,7 @@ methods:
 6. **Document Parameters**: Give every `ConfigField` a short `description`
 7. **Key Results by Id**: Name molecules with `record.id` and key score rows by `id`/`pose`, with `directions`, so they join downstream
 8. **Test with Real Data**: Don't just test with toy examples
+9. **Validate the Pool**: Compare all output inventories once, reporting independent errors together and accounting for every intentional omission or partial failure
 
 ## Common Patterns
 

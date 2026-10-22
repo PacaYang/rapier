@@ -4,6 +4,7 @@ Prepares receptor structures by removing waters/heteroatoms, adding hydrogens
 and (optionally) converting to PDBQT with Open Babel.
 """
 
+import math
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -54,8 +55,69 @@ class ProteinPreparation(Method):
     environment = EnvironmentSpec(executables=["obabel"])
 
     def check_inputs(self, inputs: Dict[str, Any]) -> List[str]:
-        valid, error = validate_pdb_file(inputs["receptor"].path)
-        return [] if valid else [error]
+        # Keep the input contract cheap; execution-host content checks belong
+        # in check_dependencies so local and scheduled runs share them.
+        return []
+
+    @staticmethod
+    def _structure_errors(artifact: Any, label: str) -> List[str]:
+        errors: List[str] = []
+        try:
+            valid, error = validate_pdb_file(artifact.path)
+            if not valid:
+                return [f"{label}: {error}"]
+            atom_count = 0
+            for number, line in enumerate(artifact.path.read_text().splitlines(), 1):
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                atom_count += 1
+                try:
+                    coordinates = [float(line[start:start + 8]) for start in (30, 38, 46)]
+                    if not all(math.isfinite(value) for value in coordinates):
+                        raise ValueError("non-finite coordinates")
+                except ValueError:
+                    errors.append(f"{label}: invalid atom coordinates on line {number}")
+            if not atom_count:
+                errors.append(f"{label}: no valid ATOM/HETATM record prefixes")
+        except (AttributeError, OSError, UnicodeError) as exc:
+            errors.append(f"{label}: cannot read structure: {exc}")
+        return errors
+
+    def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        receptor = inputs.get("receptor")
+        if receptor is None:
+            return ["receptor is required"]
+        errors = self._structure_errors(receptor, "receptor")
+        if receptor.format != "pdb":
+            errors.append("receptor must be converted to PDB before preparation")
+        return errors
+
+    def validate_outputs(
+        self, inputs: Dict[str, Any], outputs: Dict[str, Any], ctx: RunContext,
+    ) -> List[str]:
+        errors: List[str] = []
+        receptor = outputs.get("prepared_receptor")
+        if receptor is None:
+            errors.append("prepared_receptor is missing")
+        else:
+            errors.extend(self._structure_errors(receptor, "prepared_receptor"))
+            expected = self.config["output_format"]
+            if receptor.format != expected:
+                errors.append(f"prepared_receptor format must be {expected}")
+        try:
+            log = outputs["preparation_log"].load()
+            if not isinstance(log, dict):
+                errors.append("preparation_log must be a JSON object")
+            else:
+                for key in ("steps", "warnings"):
+                    values = log.get(key)
+                    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+                        errors.append(f"preparation_log.{key} must be a list of strings")
+                if isinstance(log.get("steps"), list) and not log["steps"]:
+                    errors.append("preparation_log.steps must describe the preparation")
+        except (KeyError, AttributeError, OSError, ValueError, UnicodeError) as exc:
+            errors.append(f"preparation_log cannot be read: {exc}")
+        return errors
 
     def _remove_waters_and_hetero(self, pdb_path: Path, output_path: Path) -> None:
         with open(pdb_path) as f_in, open(output_path, "w") as f_out:

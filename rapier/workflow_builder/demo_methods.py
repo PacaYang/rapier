@@ -41,6 +41,17 @@ class DemoMethod(Method):
     version = "0.1"
     resources = ResourceSpec(cpus=1, memory="2GB", time="00:10:00")
 
+    def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        """Mock methods need only the structural input contract checked by Method."""
+        return []
+
+    def validate_outputs(
+        self, inputs: Dict[str, Any], outputs: Dict[str, Any], ctx: RunContext,
+    ) -> List[str]:
+        """Check the pooled placeholder inventory; no scientific claims are made."""
+        return [f"Missing demo output: {name}" for name, port in self.output_spec.ports.items()
+                if port.required and name not in outputs]
+
     def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         outputs: Dict[str, Any] = {}
         for port_name, port in self.output_spec.ports.items():

@@ -33,16 +33,27 @@ def _retitle(payload: str, title: str) -> str:
     )
 
 
-def _unique_name(name: str, used: Dict[str, int]) -> str:
-    """Make names unique even when a source name already has an index suffix."""
-    count = used.get(name, 0)
-    candidate = name if count == 0 else f"{name}-{count + 1}"
-    while candidate in used:
-        count += 1
-        candidate = f"{name}-{count + 1}"
-    used[name] = count + 1
-    used[candidate] = 1
-    return candidate
+def _ligand_names(blocks: List[str]) -> List[str]:
+    """Assign occurrence IDs while preserving every distinct source title."""
+    titles = [raw.splitlines()[0].strip() if raw.splitlines() else "" for raw in blocks]
+    names = [_safe_name(title, f"ligand_{index}") for index, title in enumerate(titles)]
+    reserved = set(names)
+    explicit = {name for title, name in zip(titles, names) if title}
+    used = set()
+    result = []
+    for title, name in zip(titles, names):
+        candidate = name
+        suffix = 2
+        while (
+            candidate in used
+            or candidate != name and candidate in reserved
+            or not title and candidate in explicit
+        ):
+            candidate = f"{name}-{suffix}"
+            suffix += 1
+        used.add(candidate)
+        result.append(candidate)
+    return result
 
 
 def split_sdf(path: Path, output_dir: Path) -> List[Dict[str, Any]]:
@@ -52,16 +63,10 @@ def split_sdf(path: Path, output_dir: Path) -> List[Dict[str, Any]]:
     molecule.  Splitting on the SDF record delimiter avoids requiring RDKit in
     the execution environment and preserves the input molecule text exactly.
     """
-    text = path.read_text()
     records: List[Dict[str, Any]] = []
-    used: Dict[str, int] = {}
-    for index, raw in enumerate(text.split("$$$$")):
-        if not raw.strip():
-            continue
-        stripped_raw = raw.lstrip()
-        record = stripped_raw.rstrip() + "\n$$$$\n"
-        first_line = stripped_raw.splitlines()[0].strip() if stripped_raw.splitlines() else ""
-        stem = _unique_name(_safe_name(first_line, f"ligand_{index}"), used)
+    blocks = split_sdf_text(path.read_text())
+    for index, (raw, stem) in enumerate(zip(blocks, _ligand_names(blocks))):
+        record = sdf_terminated(raw)
         sdf_path = output_dir / f"{stem}.sdf"
         sdf_path.write_text(record)
         records.append({"index": index, "name": stem, "sdf": str(sdf_path)})
@@ -292,8 +297,6 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
         except Exception as exc:
             result["error"] = str(exc)
         results.append(result)
-        if result.get("error") and not config.get("allow_partial_failures", True):
-            break
 
     successful = [item for item in results if item["success"]]
     failed = [item for item in results if not item["success"]]

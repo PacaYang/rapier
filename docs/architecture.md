@@ -66,12 +66,15 @@ The foundational runtime types:
 - **`Method`** (`rapier.core.method`) — the one base class of all methods.
   Subclasses declare their contract as class attributes (`inputs`/`outputs`
   ports over the `rapier.data` types, `config_fields`, `resources`,
-  `environment`, `ui_hints`) and implement `run(inputs, ctx)`. The base class
-  formats inputs (wrap raw values as the port's data class, validate, convert,
-  stage) and outputs (wrap returned paths, rows and dicts, validate, add
-  provenance), and provides a default `get_command`/`collect_outputs` through
-  the generic `rapier.methods.runner`. `RunContext` and `MethodError` live
-  alongside it.
+  `environment`, `ui_hints`) and implement `check_dependencies(inputs, ctx)`,
+  `run(inputs, ctx)` and `validate_outputs(inputs, outputs, ctx)`. The base
+  class formats inputs, checks execution-host prerequisites, normalizes all
+  outputs best-effort and calls the semantic validator once on the pooled
+  result mapping. Concrete hooks may be inherited; registration rejects the
+  base defaults. All built-in methods use the generic
+  `rapier.methods.runner` for commands and validated output receipts.
+  `RunContext.output_errors` retains independent collection failures.
+  `RunContext` and `MethodError` live alongside the base class.
 - **`Task`** — a stateful runtime instance of a method execution. Holds inputs,
   outputs, status, directories, timing, retry state, and SLURM job info.
 - **`Pipeline`** — a workflow definition: tasks, connections, pooling rules,
@@ -200,9 +203,10 @@ already has directories set. Methods write their results to
 
 A registry-backed library of concrete `Method` subclasses, with mixins for
 parallelization and checkpointing. `MethodRegistry.auto_discover()` registers
-every class with a `register_name`. `rapier.methods.runner` is the generic
-scheduler entry point that every method uses by default; `vina_docking` and
-`boltz2` submit their own manifest runners instead. See the
+every valid class with a `register_name` and concrete dependency/validation
+hooks. `rapier.methods.runner` is the scheduler entry point for every built-in
+method, including `vina_docking` and `boltz2`, which call specialized manifest
+helpers inside `run`. See the
 [Method Reference](method_reference.md).
 
 ### Workflow builder (`rapier.workflow_builder`)
@@ -234,8 +238,8 @@ vanilla-JS canvas in `static/`. It has no type logic of its own:
 3. **Build**: `Pipeline.from_config` instantiates each registered method as `method_class(name=<id>, config=<config>)` and creates control plus data-reference connections.
 4. **Graph**: `Pipeline.to_execution_graph` yields an `ExecutionGraph`.
 5. **Schedule**: the `Scheduler` repeatedly yields ready tasks.
-6. **Run**: `TaskRunner` uses `InputResolver` to resolve references, lets the method format its inputs (wrap, validate, convert, stage under `input/normalized/`) and validate inputs and environment, then generates and submits the SLURM script. The job runs `execute` (`format_inputs` → `validate_inputs` → `run` → `format_outputs`) through the generic runner or the method's own runner.
-7. **Monitor**: the engine polls job status and, on completion, takes the method's `collect_outputs` (typed, validated, provenance-tagged artifacts) as `task.outputs`.
+6. **Run**: `TaskRunner` resolves references, formats and structurally validates inputs, then submits the SLURM script. After environment activation, the generic runner calls `execute`: format/validate inputs → environment and method dependency checks → `run` → best-effort normalization of all outputs → one pooled semantic validation. Only validated results populate `task.outputs`.
+7. **Monitor**: the engine polls job status and collects completed receipts carrying `validation_version: 1`. Collection failure overrides scheduler success before state persistence, success recording or downstream release. Legacy receipts require a rerun.
 8. **Pool**: at join points, `ResultPooler` combines branch results.
 9. **Handle failures**: `FailureHandler` enforces the configured policy.
 10. **Finalize**: configured pipeline outputs are resolved into `ExecutionResult.pipeline_outputs`, state is saved, and a report is generated.

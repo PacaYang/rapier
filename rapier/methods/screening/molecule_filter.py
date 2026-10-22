@@ -12,13 +12,14 @@ import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from ...core.method import Method, MethodError, RunContext
+from ...core.method import Method, RunContext
 from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
 from ...data import (
     KNOWN_DIRECTIONS, BindingSite, Molecule, Molecules, Report, Scores, Table,
     load_box, load_table, molecule_id, parse_sdf_record, split_sdf,
 )
 from ...data.tables import ID_COLUMNS, POSE_COLUMNS
+from ._validation import compare_inventory, integer, number, read_output, read_records
 
 
 OPERATORS = ("<", "<=", ">", ">=", "==", "!=", "between", "in", "not_in", "exists")
@@ -164,7 +165,9 @@ def _join_scores(poses: List[Dict[str, Any]], rows: List[Dict[str, Any]], id_col
     several rows pair with poses in order, sorted by ``pose`` (or ``mode``).
     """
     if not rows:
-        return 0
+        for pose in poses:
+            pose["missing_score_tables"] = pose.get("missing_score_tables", 0) + 1
+        return len(poses)
     key = _key_column(rows, id_column)
     if key is None:
         if len(rows) != len(poses):
@@ -188,10 +191,12 @@ def _join_scores(poses: List[Dict[str, Any]], rows: List[Dict[str, Any]], id_col
         group = groups.get(_normalize_name(pose["name"]))
         if not group:
             unmatched += 1
+            pose["missing_score_tables"] = pose.get("missing_score_tables", 0) + 1
             continue
         row = group[0] if len(group) == 1 else (group[pose["pose_rank"] - 1] if pose["pose_rank"] <= len(group) else None)
         if row is None:
             unmatched += 1
+            pose["missing_score_tables"] = pose.get("missing_score_tables", 0) + 1
         else:
             pose["scores"].update(row)
     return unmatched
@@ -236,9 +241,8 @@ def filter_poses(
                       "pose_rank": seen[identifier], "record": record, "heavy": parsed["heavy"],
                       "properties": parsed["properties"], "scores": {}, "metrics": {}})
 
-    unmatched = 0
     for rows in tables:
-        unmatched = max(unmatched, _join_scores(poses, rows, config["id_column"]))
+        _join_scores(poses, rows, config["id_column"])
 
     padding = config["box_padding"]
     for pose in poses:
@@ -299,6 +303,7 @@ def filter_poses(
     for pose in poses:
         present.update(pose["metrics"], pose["scores"], pose["properties"])
     present_lower = {name.lower() for name in present}
+    selected_indices = {pose["index"] for pose in selected}
     report = {
         "gate": gate,
         "total_poses": len(poses),
@@ -308,12 +313,19 @@ def filter_poses(
         "kept": len(selected),
         "kept_molecules": len({p["name"] for p in selected}),
         "rejected_by": rejected_by,
-        "poses_without_scores": unmatched,
+        "poses_without_scores": sum(1 for p in poses if p.get("missing_score_tables")),
         "poses_without_coordinates": sum(1 for p in poses if not p["heavy"]),
         "unknown_columns": sorted({r["column"] for r in rules if r["column"].lower() not in present_lower}),
         "criteria": labels,
         "position_mode": mode,
         "binding_site": box,
+        "outcomes": [
+            {"index": p["index"], "id": p["id"], "pose": p["pose_rank"],
+             "passed": not p["failures"], "selected": p["index"] in selected_indices,
+             "failures": p["failures"], "has_coordinates": bool(p["heavy"]),
+             "missing_scores": bool(p.get("missing_score_tables"))}
+            for p in poses
+        ],
     }
     return selected, report
 
@@ -526,6 +538,175 @@ class MoleculeFilter(Method):
             f"input port '{port}' must be connected for {', '.join(sorted(set(reasons)))}"
             for port, reasons in needs.items() if port not in bound
         ]
+
+    def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        errors = self.validate_bindings(name for name, value in inputs.items() if value is not None)
+        records = read_records(inputs, "molecules", errors, name_property=self.config["name_property"])
+        if records is not None and not records:
+            errors.append("molecules must contain at least one record")
+        poses = [{"name": record.name, "pose_rank": record.pose, "scores": {}} for record in records or []]
+        for index, table in enumerate(inputs.get("scores") or []):
+            try:
+                rows = table.rows()
+                _join_scores(poses, rows, self.config["id_column"])
+                key = _key_column(rows, self.config["id_column"])
+                pose_key = next((name for name in POSE_COLUMNS if rows and name in rows[0]), None)
+                if key and pose_key:
+                    keys = [(_normalize_name(row.get(key)), integer(row.get(pose_key), 1)) for row in rows]
+                    if any(rank is None for _, rank in keys) or len(set(keys)) != len(keys):
+                        errors.append(f"scores[{index}]: invalid or duplicate molecule/pose keys")
+            except Exception as exc:
+                errors.append(f"Cannot join scores[{index}]: {exc}")
+        if inputs.get("binding_site") is not None:
+            try:
+                box = load_box(inputs["binding_site"])
+                if box is None or any(
+                    not isinstance(box.get(key), (list, tuple)) or len(box[key]) != 3
+                    or any(number(value) is None or (key == "size" and number(value) <= 0) for value in box[key])
+                    for key in ("center", "size")
+                ):
+                    errors.append("binding_site needs three finite center coordinates and positive size dimensions")
+            except Exception as exc:
+                errors.append(f"Cannot read binding_site: {exc}")
+        if inputs.get("reference_ligand") is not None:
+            reference = read_records(inputs, "reference_ligand", errors)
+            if reference is not None and (not reference or not reference[0].heavy_atoms
+                    or any(number(value) is None for point in reference[0].heavy_atoms for value in point)):
+                errors.append("reference_ligand has no finite heavy-atom coordinates")
+        return errors
+
+    def validate_outputs(self, inputs: Dict[str, Any], outputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        errors: List[str] = []
+        source = read_records(inputs, "molecules", errors, name_property=self.config["name_property"])
+        filtered = read_output(outputs, "filtered_molecules", "records", errors, name_property=self.config["name_property"])
+        rows = read_output(outputs, "filtered_scores", "rows", errors)
+        report = read_output(outputs, "report", "load", errors)
+        row_keys, source_keys = [], []
+        for index, row in enumerate(rows or []):
+            where = f"filtered_scores row {index + 1}"
+            identifier, pose = row.get("id"), integer(row.get("pose"), 1)
+            original_pose = integer(row.get("pose_rank"), 1)
+            if not isinstance(identifier, str) or not identifier or pose is None or original_pose is None:
+                errors.append(f"{where}: needs id and positive pose/pose_rank keys")
+            else:
+                row_keys.append((identifier, pose))
+                source_keys.append((identifier, original_pose))
+            if integer(row.get("filter_rank"), 1) != index + 1:
+                errors.append(f"{where}: filter_rank must equal {index + 1}")
+            for metric in ("heavy_atoms", "centroid_distance", "fraction_in_box", "reference_distance"):
+                if metric in row and number(row[metric]) is None:
+                    errors.append(f"{where}: {metric} must be finite")
+        if filtered is not None and rows is not None:
+            compare_inventory(row_keys, [(record.id, record.pose) for record in filtered], "filtered molecule/score keys", errors)
+        for record in filtered or []:
+            if any(number(value) is None for point in record.heavy_atoms for value in point):
+                errors.append(f"filtered_molecules record {record.index + 1}: coordinates must be finite")
+        if source is not None:
+            available = {(record.id, record.pose) for record in source}
+            if len(set(source_keys)) != len(source_keys) or any(key not in available for key in source_keys):
+                errors.append("filtered_scores contains duplicate or unknown input pose keys")
+        if self.config["fail_if_empty"] and filtered is not None and not filtered:
+            errors.append("No poses passed the filter")
+        if report is None:
+            return errors
+        if not isinstance(report, dict):
+            errors.append("report must be a mapping")
+            return errors
+        total = len(source) if source is not None else integer(report.get("total_poses"))
+        total = total if total is not None else 0
+        kept = len(filtered) if filtered is not None else len(rows or [])
+        expected = {"total_poses": total, "kept": kept}
+        if source is not None:
+            expected["total_molecules"] = len({record.name for record in source})
+            expected["poses_without_coordinates"] = sum(not record.heavy_atoms for record in source)
+        if filtered is not None:
+            expected["kept_molecules"] = len({record.name for record in filtered})
+        outcomes = report.get("outcomes")
+        good_outcomes = []
+        if not isinstance(outcomes, list):
+            errors.append("report.outcomes must account for every input pose")
+        else:
+            for index, outcome in enumerate(outcomes):
+                if not isinstance(outcome, dict) or not isinstance(outcome.get("id"), str) or integer(outcome.get("pose"), 1) is None or not all(isinstance(outcome.get(key), bool)
+                        for key in ("passed", "selected", "has_coordinates", "missing_scores")) or not isinstance(outcome.get("failures"), list):
+                    errors.append(f"report.outcomes[{index}]: invalid outcome flags or failures")
+                    continue
+                failures = outcome["failures"]
+                if any(not isinstance(failure, str) or not failure for failure in failures):
+                    errors.append(f"report.outcomes[{index}]: failures must be nonempty strings")
+                    continue
+                if outcome["passed"] != (not failures) or outcome["selected"] and not outcome["passed"]:
+                    errors.append(f"report.outcomes[{index}]: inconsistent selection/failure flags")
+                good_outcomes.append(outcome)
+            if source is not None:
+                compare_inventory([(outcome.get("id"), integer(outcome.get("pose"), 1)) for outcome in good_outcomes],
+                                  [(record.id, record.pose) for record in source], "report outcome inventory", errors)
+                source_lookup = {(record.id, record.pose): record for record in source}
+                joined = [{"name": record.name, "pose_rank": record.pose, "scores": {}} for record in source]
+                for index, table in enumerate(inputs.get("scores") or []):
+                    try:
+                        _join_scores(joined, table.rows(), self.config["id_column"])
+                    except Exception as exc:
+                        errors.append(f"Cannot verify input score accounting for scores[{index}]: {exc}")
+                missing_scores = {(record.id, record.pose): bool(pose.get("missing_score_tables"))
+                                  for record, pose in zip(source, joined)}
+                for outcome in good_outcomes:
+                    key = (outcome["id"], integer(outcome["pose"], 1))
+                    record = source_lookup.get(key)
+                    if record is not None and (integer(outcome.get("index")) != record.index
+                            or outcome["has_coordinates"] != bool(record.heavy_atoms)
+                            or outcome["missing_scores"] != missing_scores[key]):
+                        errors.append(f"report outcome {outcome['id']}/{outcome['pose']}: input index/coordinate/score flags disagree")
+            selected = [outcome for outcome in good_outcomes if outcome["selected"]]
+            passed = [outcome for outcome in good_outcomes if outcome["passed"]]
+            if rows is not None:
+                compare_inventory(source_keys, [(outcome.get("id"), integer(outcome.get("pose"), 1)) for outcome in selected],
+                                  "selected outcome/score inventory", errors)
+            expected["passed_criteria"] = len(passed)
+            expected["poses_without_scores"] = sum(outcome["missing_scores"] for outcome in good_outcomes)
+            if source is not None:
+                names = {(record.id, record.pose): record.name for record in source}
+                expected["passed_molecules"] = len({names.get((outcome.get("id"), integer(outcome.get("pose"), 1))) for outcome in passed})
+            rejected: Dict[str, int] = {}
+            for outcome in good_outcomes:
+                for failure in outcome["failures"]:
+                    rejected[failure] = rejected.get(failure, 0) + 1
+            if report.get("rejected_by") != rejected:
+                errors.append("report.rejected_by disagrees with per-pose outcomes")
+        for key, value in expected.items():
+            if integer(report.get(key)) != value:
+                errors.append(f"report.{key} must equal {value}")
+        passed_count = integer(report.get("passed_criteria"))
+        if passed_count is None or not kept <= passed_count <= total:
+            errors.append("report counts must satisfy kept <= passed_criteria <= total_poses")
+        gate = report.get("gate")
+        if not isinstance(gate, dict):
+            errors.append("report.gate must be a mapping")
+        else:
+            unit = "molecules" if self.config["limit_by"] == "molecules" else "poses"
+            entered = expected.get("total_molecules", 0) if unit == "molecules" else total
+            admitted = expected.get("kept_molecules", 0) if unit == "molecules" else kept
+            if gate.get("unit") != unit or integer(gate.get("entered")) != entered or integer(gate.get("admitted")) != admitted:
+                errors.append("report.gate unit/entered/admitted disagree with inventories")
+            candidates, dropped = integer(gate.get("passed_criteria")), integer(gate.get("dropped_by_limit"))
+            if candidates is None or dropped is None or candidates - admitted != dropped:
+                errors.append("report.gate candidates must equal admitted + dropped_by_limit")
+            if isinstance(outcomes, list):
+                candidate_count = expected.get("passed_molecules") if unit == "molecules" or self.config["best_pose_only"] else len(passed)
+                if candidate_count is not None and candidates != candidate_count:
+                    errors.append("report.gate passed_criteria disagrees with per-pose outcomes")
+            basis = entered if self.config["percent_of"] == "input" else candidates
+            limits = [self.config["top_n"]] if self.config["top_n"] else []
+            if self.config["top_percent"] and basis is not None:
+                limits.append(math.ceil(round(basis * self.config["top_percent"] / 100.0, 9)))
+            limit = min(limits) if limits else None
+            if gate.get("limit") != limit or limit is not None and admitted > limit:
+                errors.append("report.gate limit disagrees with configured gate")
+            percent = round(100.0 * admitted / entered, 4) if entered else 0.0
+            if number(gate.get("admitted_percent")) != percent:
+                errors.append("report.gate admitted_percent disagrees with counts")
+        return errors
+
     def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         molecules = inputs["molecules"]
         tables = list(inputs.get("scores") or [])
@@ -544,10 +725,7 @@ class MoleculeFilter(Method):
             molecules.path.read_text(), [table.rows() for table in tables], self.config,
             load_box(inputs.get("binding_site")), reference, directions,
         )
-        outputs = self._outputs(ctx, molecules, kept, report, directions)
-        if self.config["fail_if_empty"] and not kept:
-            raise MethodError(f"No poses passed the filter: {report['rejected_by']}")
-        return outputs
+        return self._outputs(ctx, molecules, kept, report, directions)
 
     def _outputs(self, ctx: RunContext, molecules: Any, kept: List[Dict[str, Any]],
                  report: Dict[str, Any], directions: Dict[str, str]) -> Dict[str, Any]:

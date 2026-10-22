@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rapier.data import Molecules, Poses, ProteinStructure, Scores
+from rapier.core.method import RunContext
+from rapier.core.task import Task
 from rapier.methods.docking.vina import VinaDocking
 
 
@@ -73,7 +75,7 @@ def test_input_validation_nonexistent_files(tmp_path):
     assert len(errors) > 0
 
 
-def test_input_validation_invalid_box_params():
+def test_input_validation_invalid_box_params(tmp_path):
     """Test input validation with invalid box parameters."""
     method = VinaDocking(parameters={
         'box_center': [1.0, 2.0],  # Should be 3 values
@@ -96,8 +98,12 @@ def test_input_validation_invalid_box_params():
             'ligands': ligands_path
         }
 
-        is_valid, errors = method.validate_inputs(inputs)
-        assert not is_valid
+        normalized = method.format_inputs(inputs)
+        is_valid, errors = method.validate_inputs(normalized)
+        assert is_valid, errors
+        task = Task("invalid_box", method, normalized)
+        task.work_dir = tmp_path / "work"
+        errors = method.check_dependencies(normalized, RunContext.for_task(task))
         assert any('box_center' in err for err in errors)
     finally:
         Path(receptor_path).unlink()
@@ -117,6 +123,7 @@ def test_environment_validation():
 
 
 @patch('rapier.methods.docking.vina.check_executable')
+@patch.dict('sys.modules', {'prody': object()})
 def test_environment_validation_mocked(mock_check):
     """Test environment validation with mocked executables."""
     method = VinaDocking()

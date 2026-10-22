@@ -6,7 +6,9 @@ contract and ``run``. A method is a :class:`rapier.Method` subclass that:
 1. Declares typed ports over the data classes in :mod:`rapier.data`
    (Molecules, Poses, Scores, ProteinStructure, BindingSite, ...).
 2. Declares its settings as ``config_fields`` (validated strictly).
-3. Implements ``run(inputs, ctx)``: typed inputs in, ``{port: value}`` out.
+3. Implements ``check_dependencies(inputs, ctx)`` before execution,
+   ``run(inputs, ctx)`` and ``validate_outputs(inputs, outputs, ctx)`` once
+   after all output ports have been pooled.
 
 The base class formats inputs (wraps paths/SMILES/dicts as the port's data
 class, converts formats, stages files) and arranges outputs (paths, row lists
@@ -17,6 +19,7 @@ Put the file under ``rapier/methods/`` for auto-discovery, or register it
 manually with ``get_registry().register("my_custom_method", MyCustomMethod)``.
 """
 
+from collections import Counter
 from typing import Any, Dict, List
 
 from rapier import (
@@ -69,6 +72,54 @@ class MyCustomMethod(Method):
         """Content checks on inputs that already satisfy the port contract."""
         return []
 
+    def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
+        """Check execution prerequisites after examining the declared input contract."""
+        try:
+            return [] if inputs["molecules"].records() else ["No molecules in input"]
+        except (OSError, ValueError, UnicodeError) as exc:
+            return [f"Cannot read molecules: {exc}"]
+
+    def validate_outputs(
+        self, inputs: Dict[str, Any], outputs: Dict[str, Any], ctx: RunContext,
+    ) -> List[str]:
+        """Compare all result inventories together, collecting independent errors."""
+        errors, pooled = [], {}
+        readers = {"kept": lambda value: value.records(),
+                   "summary": lambda value: value.load()}
+        for port, reader in readers.items():
+            try:
+                pooled[port] = reader(outputs[port])
+            except (KeyError, AttributeError, OSError, ValueError, UnicodeError) as exc:
+                errors.append(f"Cannot read {port}: {exc}")
+        try:
+            pooled["scores"], row_errors = outputs["scores"].rows_with_errors()
+            errors.extend(f"Cannot read scores: {error}" for error in row_errors)
+        except (KeyError, AttributeError) as exc:
+            errors.append(f"Cannot read scores: {exc}")
+        rows = pooled.get("scores")
+        if rows is not None:
+            expected = Counter((record.id, record.pose) for record in inputs["molecules"].records())
+            actual = Counter()
+            passed = []
+            for index, row in enumerate(rows, 1):
+                try:
+                    actual[(str(row["id"]), int(row["occurrence"]))] += 1
+                    if str(row["passed"]).lower() not in ("true", "false"):
+                        raise ValueError("passed must be true or false")
+                    if str(row["passed"]).lower() == "true":
+                        passed.append(str(row["id"]))
+                except (KeyError, TypeError, ValueError) as exc:
+                    errors.append(f"Invalid score row {index}: {exc}")
+            if actual != expected:
+                errors.append("Scores must cover every input occurrence exactly once")
+            if "kept" in pooled and Counter(record.id for record in pooled["kept"]) != Counter(passed):
+                errors.append("Kept molecules must match the passing scores")
+            if "summary" in pooled:
+                summary = pooled["summary"]
+                if not isinstance(summary, dict) or summary.get("total") != len(rows) or summary.get("kept") != len(passed):
+                    errors.append("Summary counts must match the complete score inventory")
+        return errors
+
     def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         """Do the work. ``ctx.output_dir`` is where to write files."""
         molecules = inputs["molecules"]
@@ -76,7 +127,8 @@ class MyCustomMethod(Method):
         for record in molecules.records():  # id, name, block, properties, atoms
             heavy = len(record.heavy_atoms)
             passed = heavy >= self.config["min_heavy_atoms"]
-            rows.append({"id": record.id, "heavy_atoms": heavy, "passed": passed, "label": self.config["label"]})
+            rows.append({"id": record.id, "occurrence": record.pose,
+                         "heavy_atoms": heavy, "passed": passed, "label": self.config["label"]})
             if passed:
                 kept.append(record.block)
         if not rows:

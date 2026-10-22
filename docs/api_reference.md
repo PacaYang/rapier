@@ -42,28 +42,43 @@ Instance attributes: `name`, `version`, `config` (normalized), `input_spec`,
 constructor raises `ValueError` for an invalid config.
 
 Hooks to override: `run(inputs, ctx) -> Dict[str, Any]` (required),
+`check_dependencies(inputs, ctx) -> List[str]` and
+`validate_outputs(inputs, outputs, ctx) -> List[str]` (both required for
+registration),
 `migrate_config(config) -> dict`, `check_config(config) -> List[str]`,
 `validate_bindings(bound_ports) -> List[str]`,
 `check_inputs(inputs) -> List[str]`.
 
 Other methods:
 
-- `execute(task) -> TaskStatus`: `format_inputs` → `validate_inputs` → `run`
-  → `format_outputs` into `task.outputs`; any exception fails the task
+- `execute(task) -> TaskStatus`: format and structurally validate inputs,
+  collect `validate_environment` and `check_dependencies` errors on the execution
+  host, then `run`, normalize all output ports best-effort, and call
+  `validate_outputs` once with the pooled mapping. All independent output
+  errors are combined; only success publishes `task.outputs`.
 - `format_inputs(raw, input_dir=None) -> dict`: wrap, validate, convert and
   (with `input_dir`) stage raw values
 - `coerce_inputs(raw) -> (dict, List[str])`: wrap without writing files
 - `validate_inputs(inputs) -> (bool, List[str])`: port contract, then
   `validate_bindings`, then `check_inputs`
 - `validate_environment() -> (bool, List[str])`: `env_requirements.validate()`
-- `format_outputs(raw, ctx=None) -> dict`: wrap, validate, add provenance
+- `format_outputs(raw, ctx=None) -> dict`: wrap, structurally validate, add
+  provenance; does not invoke the child semantic validator
+- `extract_binding_sites(outputs) -> List[Dict[str, Any]]`: read the declared
+  `predicted_structures` PDB/mmCIF outputs and return per-model, per-ligand
+  protein residue contacts using a strict sub-5-Å heavy-atom distance; this
+  requires the optional Gemmi package
 - `get_command(task) -> str`: default writes `task.json` and returns the
   `rapier.methods.runner` command
 - `collect_outputs(task) -> dict`: default reads `outputs/outputs.json`
 
-`RunContext(task, work_dir, input_dir, output_dir, resources={})`, built with
-`RunContext.for_task(task)`. `MethodError(RuntimeError)` fails a task with its
-message.
+`RunContext(task, work_dir, input_dir, output_dir, resources={}, output_errors=[])`,
+built with `RunContext.for_task(task)`. Specialized collectors append independent
+read/parse errors to `output_errors` while continuing to gather other artifacts.
+Hooks return all discoverable errors as `List[str]`. The pooled validator must
+tolerate missing ports and compare complete identities, counts, files and
+cross-port relationships. Method prerequisites are separate from DAG ordering.
+`MethodError(RuntimeError)` fails a task with its message.
 
 ### `Task`
 
@@ -242,8 +257,9 @@ prepare_input(artifact, port, input_dir, name,
 `Method.format_inputs` then calls `prepare_input` per artifact, which
 validates it, writes inline values, converts to a format the port accepts and
 stages it under `input_dir` (without `input_dir` it only validates). Output
-checks happen in `Method.format_outputs`; there is no separate output
-normalizer.
+structural checks happen in `Method.format_outputs`. Execution uses the same
+rules best-effort across the full output mapping before child semantic
+validation.
 
 ## rapier.data
 
@@ -257,6 +273,7 @@ Molecules.from_smiles(smiles, names=None, metadata=None)
 Molecules.write_sdf(blocks, path, metadata=None)              # also Molecule, Poses
 MoleculeRecord(id, name, index, pose=1, smiles=None, block=None, properties={}, atoms=[])
 Table.rows() -> List[dict]
+Table.rows_with_errors() -> Tuple[List[dict], List[str]]
 Table.from_rows(rows, path=None, format=None, columns=None, metadata=None)
 Scores.records(id_column="") -> List[dict]       # adds sanitized "id" and int "pose"
 Scores.directions(include_known=True) -> Dict[str, str]   # column -> "lower"/"higher"
@@ -266,6 +283,10 @@ BindingSite.box(); BindingSite.from_box(center, size, metadata=None)
 Report.load()
 molecule_id(name, fallback="") -> str            # the shared, filename-safe join key
 ```
+
+`Table.rows()` is strict. `rows_with_errors()` retains valid JSON object rows
+and reports malformed row positions or read/parse errors, allowing pooled
+validators to check the remaining rows and aggregate independent failures.
 
 Also exported: `split_sdf`, `parse_sdf_record`, `parse_smiles_lines`,
 `sdf_terminated`, `load_box`, `load_table`, `write_rows` and
@@ -505,6 +526,14 @@ registry.list_info() -> Dict[str, dict]
 registry.clear()
 ```
 
+`register` requires a `Method` subclass with callable concrete
+`check_dependencies` and `validate_outputs` hooks. Full MRO resolution accepts
+inherited implementations and aliases; resolving to either empty `Method`
+default is a registration error. Auto-discovery warns with the class name and
+missing hook when it skips a class. Registration checks the implementation
+contract; authors design both functions after examining input/output ports and
+configuration.
+
 ### Mixins and runner
 
 ```python
@@ -518,6 +547,15 @@ entry point: `runner_command(method, task)` writes `task.json`,
 `run_task_file(path)` rebuilds and executes the method and writes
 `outputs/outputs.json`, `read_outputs(task)` reads it back, and
 `python -m rapier.methods.runner --task <path>` runs a task file.
+
+All built-in methods, including Vina and Boltz2, use this entry point. Their
+specialized manifest helpers run inside `run`. Successful receipts carry
+`validation_version: 1`; collection rejects failed, incomplete and legacy
+receipts. Local validated results carry the equivalent
+`task.metadata["output_validation_version"]` marker. Fresh attempts remove stale
+receipts, and collection failures override scheduler success before downstream
+tasks can run. `TaskRunner.prepare_task` only resolves, stages and structurally
+validates inputs; software checks run after environment activation in `execute`.
 
 Utilities in `rapier.methods.utils`: `parse_box_spec`, `check_executable`,
 `check_executables`, `validate_pdb_file`, `validate_sdf_file`,

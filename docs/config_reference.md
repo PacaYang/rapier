@@ -124,9 +124,12 @@ confirms the upstream output actually exists, then the method's
 `format_inputs` wraps each value as the port's data class, checks that a
 `one`-cardinality port receives exactly one artifact, applies converters, and
 symlinks (or copies) files into `<work_dir>/input/normalized/`.
-`validate_inputs` and `validate_environment` follow. When the method runs,
-`format_outputs` checks the outputs against the output ports, adds
-provenance, and fails the task if it returns an undeclared port.
+`validate_inputs` follows. After the job activates its environment,
+`Method.execute` repeats input validation and collects execution-host errors
+from `validate_environment` and `check_dependencies` before calling `run`.
+It then normalizes all output ports best-effort and calls `validate_outputs`
+once on the complete pooled mapping. Structural and semantic errors are
+combined; only valid results are published.
 
 ### `validate_bindings` hook
 
@@ -154,13 +157,16 @@ the same check. `molecule_filter` uses it. See the
 up to `max_parallel` tasks (default 4) as SLURM jobs, then checks the running
 jobs. Independent branches therefore run in parallel automatically.
 
-**Jobs.** Each job runs `method.get_command(task)`. For most methods that is
+**Jobs.** Each job runs `method.get_command(task)`. All built-in methods use
 the generic runner, `python -m rapier.methods.runner --task
 <work_dir>/task.json`, which executes the method on the compute node and
-writes `<work_dir>/outputs/outputs.json`; `vina_docking` and `boltz2` run
-their own manifest runners. After the job completes, `collect_outputs` reads
-the results into `task.outputs`. A collection error is recorded in
-`task.error_message`.
+writes `<work_dir>/outputs/outputs.json`; `vina_docking` and `boltz2` call
+specialized manifest helpers inside `run`. After the job completes,
+`collect_outputs` accepts a completed receipt with `validation_version: 1`
+and reads the validated results into `task.outputs`. Legacy receipts require
+a rerun. A collection error sets the task to `FAILED`, records
+`task.error_message`, and prevents downstream release even if SLURM reported
+success.
 
 **Dry runs.** With `dry_run=True` the SLURM client accepts every job and
 reports it `COMPLETED` without running it, and outputs are not collected. A

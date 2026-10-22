@@ -2,6 +2,7 @@
 
 import copy
 import dataclasses
+import json
 
 import pytest
 
@@ -98,6 +99,53 @@ class TestMolecules:
 
 
 class TestScores:
+    @pytest.mark.parametrize("file_backed", [False, True])
+    def test_json_rows_do_not_silently_drop_malformed_entries(self, tmp_path, file_backed):
+        if file_backed:
+            path = tmp_path / "malformed.json"
+            path.write_text('[{"id":"a"}, null, 42]')
+            table = Scores.from_file(path, "json")
+        else:
+            table = Scores.inline([{"id": "a"}, None, 42], "json")
+        with pytest.raises(ValueError, match=r"invalid row\(s\): 2, 3"):
+            table.rows()
+
+    def test_empty_json_row_wrappers_remain_empty(self):
+        assert Scores.inline({"rows": []}, "json").rows() == []
+        assert Scores.inline({"records": []}, "json").rows() == []
+
+    @pytest.mark.parametrize("file_backed", [False, True])
+    @pytest.mark.parametrize("wrapper", [None, "rows", "records"])
+    def test_validation_reader_keeps_object_rows_and_reports_all_invalid_positions(self, tmp_path, file_backed, wrapper):
+        payload = [None, {"id": "a", "score": "wrong"}, 42, {"id": "b"}]
+        if wrapper is not None:
+            payload = {wrapper: payload}
+        if file_backed:
+            path = tmp_path / "partial.json"
+            path.write_text(json.dumps(payload))
+            scores = Scores.from_file(path, "json")
+        else:
+            scores = Scores.inline(payload, "json")
+        rows, errors = scores.rows_with_errors()
+        assert rows == [{"id": "a", "score": "wrong"}, {"id": "b"}]
+        assert errors == ["Table rows must be objects; invalid row(s): 1, 3"]
+        with pytest.raises(ValueError, match=r"invalid row\(s\): 1, 3"):
+            scores.rows()
+
+    def test_validation_reader_reports_file_parse_and_payload_failures(self, tmp_path):
+        malformed = tmp_path / "broken.json"
+        malformed.write_text("{broken json")
+        for scores in (Scores.from_file(malformed, "json"),
+                       Scores.from_file(tmp_path / "missing.json", "json"),
+                       Scores.inline({"rows": None}, "json")):
+            rows, errors = scores.rows_with_errors()
+            assert rows == [] and errors
+        assert Scores.inline({"rows": []}, "json").rows_with_errors() == ([], [])
+
+    def test_validation_reader_preserves_csv_rows(self, tmp_path):
+        scores = Scores.from_records([{"id": "a", "score": 1}], tmp_path / "scores.csv")
+        assert scores.rows_with_errors() == (scores.rows(), [])
+
     def test_from_records_writes_canonical_table_with_directions(self, tmp_path):
         scores = Scores.from_records(
             [{"affinity_kcal_mol": -7.0, "pose": 1, "id": "a"}], tmp_path / "s.csv",

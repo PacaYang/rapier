@@ -38,8 +38,19 @@ outside `A-Za-z0-9_.-` replaced by `_`), and every score table is keyed by
 | `boltz2_prediction` | `Boltz2PredictionMethod` | No | Alias of `boltz2` |
 
 Every method runs on SLURM through `python -m rapier.methods.runner` (see
-[Running on SLURM](method_development_guide.md#running-on-slurm)), except
-`vina_docking` and `boltz2`, which submit their own manifest runners.
+[Running on SLURM](method_development_guide.md#running-on-slurm)). Vina and Boltz2
+invoke their specialized manifest helpers inside `run`.
+
+Every registered method implements `check_dependencies(inputs, ctx)` before
+execution and `validate_outputs(inputs, outputs, ctx)` after execution. The
+first checks execution-host prerequisites alongside `validate_environment`;
+the second receives all normalized outputs once and aggregates missing,
+malformed, duplicate, unexpected and inconsistent results across ports.
+Structural output errors do not prevent independent semantic checks. Only
+validated output is published; scheduler receipts include `validation_version:
+1`, and legacy receipts require a rerun. DAG dependencies still control task
+ordering. Empty and partial results follow each method's contract, with explicit
+per-input outcome metadata and occurrence keys for duplicate IDs.
 
 Default resources below come from each method's `ResourceSpec`. They are
 informational (shown in the workflow builder); SLURM jobs use the `resources`
@@ -103,10 +114,11 @@ RDKit descriptors.
 - **Inputs**: `ligands` — `molecule.collection`, `sdf` or `smiles`
 - **Outputs**:
   - `filtered_ligands` (`molecule.collection/sdf`, `outputs/filtered.sdf`):
-    molecules that pass every bound. SDF records are copied verbatim; SMILES
-    input is written through RDKit without 3D coordinates.
+    molecules that pass every bound. Existing SDF coordinates and properties
+    are preserved, with an `input_occurrence` property added; SMILES input is
+    written through RDKit without 3D coordinates.
   - `properties` (`table.scores/csv`, `outputs/properties.csv`): one row per
-    input molecule with `id`, `mw`, `logp`, `hba`, `hbd`, `tpsa`,
+    input molecule with `id`, `input_occurrence`, `mw`, `logp`, `hba`, `hbd`, `tpsa`,
     `rotatable_bonds`, `passed` and `reasons` (`;`-separated failed checks, or
     `unparsable`). Bind it to a `molecule_filter` `scores` port to rank or gate
     on the properties.
@@ -114,6 +126,11 @@ RDKit descriptors.
     `failed_by_reason`
 - **Environment**: Python, RDKit
 - **Resources (default)**: 1 CPU, 4 GB, 1 h
+
+Pooled validation compares every input occurrence with the property rows and
+the passing `(id, input_occurrence)` inventory, checks finite typed properties
+and consistent rejection reasons, and reconciles the statistics. Empty
+filtered output is valid; invalid molecules remain explicit `unparsable` rows.
 
 ### Parameters
 
@@ -276,6 +293,14 @@ and Tanimoto similarity.
 - **Environment**: Python, RDKit
 - **Resources (default)**: 4 CPUs, 8 GB, 2 h
 
+Both outputs carry `metadata["search_inventory"]` with per-query and
+per-database outcomes (`matched`, `unmatched`, `truncated` or `invalid`) and
+candidate/returned/truncated pair counts. Duplicate input IDs receive
+deterministic collision-free occurrence suffixes; unique IDs stay unchanged.
+Pooled validation checks score identities, pair uniqueness, finite similarity
+values, ordering, limits, returned molecule identities and complete outcome
+accounting. At least one query must parse successfully; no matches is valid.
+
 ### Parameters
 
 | Parameter | Default | Description |
@@ -300,6 +325,16 @@ Prepare ligands for docking: generate 3D conformers, add hydrogens, minimize.
 - **Environment**: Python, RDKit
 - **Resources (default)**: 2 CPUs, 4 GB, 2 h
 
+Dependency checks require readable molecule input and the execution environment
+requires RDKit. The preparation log counts every input, including unparsable
+records: `total = successful + failed`, with `successful_molecules` and
+`failed_molecules` identifying `(id, occurrence)` and explaining each failure.
+Prepared SDF records preserve names and carry `rapier_input_occurrence`, so
+duplicate IDs and skipped occurrences remain unambiguous. Pooled validation
+checks this partition, output identities, heavy atoms and finite 3D coordinates.
+Partial preparation is accepted with complete failure accounting; all-invalid
+input fails the task.
+
 ### Parameters
 
 | Parameter | Default | Description |
@@ -323,6 +358,11 @@ convert to PDBQT.
 - **Environment**: Open Babel (`obabel`)
 - **Resources (default)**: 1 CPU, 4 GB, 30 m
 
+Dependency checks require a readable, nonempty PDB receptor with usable atom
+coordinates; the execution environment requires `obabel`. Pooled validation
+checks the configured output format, nonempty atom records and finite
+coordinates alongside the preparation log's `steps` and `warnings` lists.
+
 ### Parameters
 
 | Parameter | Default | Description |
@@ -338,8 +378,8 @@ convert to PDBQT.
 ## vina_docking
 
 Molecular docking with [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina)
-1.2.x. Local and SLURM execution both run one deterministic manifest workflow
-(`python -m rapier.methods.docking.vina_runner --manifest vina_manifest.json`):
+1.2.x. Local and SLURM execution both use the generic method lifecycle and call
+the deterministic `vina_runner.run_manifest` workflow from `run`:
 a PDB receptor is prepared with Meeko, each SDF record is converted to PDBQT
 with Meeko, Vina docks each ligand separately (one failure does not stop the
 rest), and Meeko exports the PDBQT poses back to SDF. A PDBQT receptor is
@@ -427,13 +467,20 @@ that fail are skipped. Parallelizable across ligands.
 | `scoring` | `vina` | `vina`, `vinardo`, or `ad4` |
 | `minimize` | true | Energy-minimize poses |
 
+Both outputs carry the same per-input `ligand_outcomes`,
+`successful_ligands` and `failed_ligands` metadata. Partial results require an
+explicit error for each failed ligand. Duplicate names receive deterministic
+suffixes that preserve unique input IDs. Pooled validation checks the complete
+outcome partition, reconciles metadata across both ports, and compares the
+`(id, pose)` inventories, readable atom coordinates and finite score columns.
+
 ---
 
 ## boltz2
 
 Biomolecular complex prediction with [Boltz-2](https://github.com/jwohlwend/boltz).
 The method creates the official Boltz YAML schema, runs `boltz predict`
-through a manifest runner (`python -m rapier.methods.prediction.boltz2_runner`),
+through the `boltz2_runner.run_manifest` helper inside the generic lifecycle,
 and normalizes the predicted structures and confidence/affinity JSON files.
 `boltz2_prediction` is a registered alias with the same contract.
 

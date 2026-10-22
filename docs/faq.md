@@ -85,8 +85,12 @@ as `boltz2_prediction`). See the [Method Reference](method_reference.md).
 ### How do I write my own method?
 
 Subclass `rapier.Method`, declare typed `inputs`/`outputs`, `config_fields`
-and a `register_name`, and implement `run(inputs, ctx)`. The base class
-formats inputs and outputs, and the generic runner executes it on SLURM. See
+and a `register_name`, then implement `check_dependencies(inputs, ctx)`,
+`run(inputs, ctx)` and `validate_outputs(inputs, outputs, ctx)` after examining
+the input/output contract. The base class checks prerequisites on the execution
+host and passes all normalized outputs to the validator once. Registered
+methods must provide concrete hooks, including through inheritance. The generic
+runner applies this lifecycle locally and on SLURM. See
 the [Method Development Guide](method_development_guide.md) and the
 [template](../examples/methods/custom_method_template.py).
 

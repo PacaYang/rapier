@@ -3,7 +3,7 @@
 import csv
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..artifacts.model import Artifact, format_from_suffix
 from .ids import molecule_id
@@ -21,13 +21,34 @@ ID_COLUMNS = ("id", "ligand", "name", "molecule", "mol_id", "compound", "title")
 POSE_COLUMNS = ("pose", "mode", "pose_rank", "model")
 
 
+def _table_rows_with_errors(data: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Keep independent JSON row objects and account for every malformed entry."""
+    if isinstance(data, dict):
+        if "rows" in data:
+            data = data["rows"]
+        elif "records" in data:
+            data = data["records"]
+        else:
+            data = [data]
+    if not isinstance(data, list):
+        return [], ["Table payload must be a list of row objects"]
+    invalid = [str(index + 1) for index, row in enumerate(data) if not isinstance(row, dict)]
+    errors = ["Table rows must be objects; invalid row(s): " + ", ".join(invalid)] if invalid else []
+    return [dict(row) for row in data if isinstance(row, dict)], errors
+
+
+def _table_rows(data: Any) -> List[Dict[str, Any]]:
+    """Read JSON rows without silently losing malformed records."""
+    rows, errors = _table_rows_with_errors(data)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return rows
+
+
 def load_table(path: Path, fmt: str) -> List[Dict[str, Any]]:
     text = Path(path).read_text()
     if fmt == "json":
-        data = json.loads(text)
-        if isinstance(data, dict):
-            data = data.get("rows") or data.get("records") or [data]
-        return [dict(row) for row in data if isinstance(row, dict)]
+        return _table_rows(json.loads(text))
     delimiter = "\t" if fmt == "tsv" else ","
     return [dict(row) for row in csv.DictReader(text.splitlines(), delimiter=delimiter)]
 
@@ -64,10 +85,23 @@ class Table(Artifact):
     def rows(self) -> List[Dict[str, Any]]:
         if self.is_file:
             return load_table(self.path, self.format)
-        data = self.value
-        if isinstance(data, dict):
-            data = data.get("rows") or data.get("records") or [data]
-        return [dict(row) for row in data if isinstance(row, dict)]
+        return _table_rows(self.value)
+
+    def rows_with_errors(self) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Read a pool for validation, retaining valid JSON siblings of bad rows.
+
+        Errors include every malformed JSON row position (one-based), or the
+        file/JSON parsing failure. Callers must include these errors in their
+        validation result; :meth:`rows` remains the strict general reader.
+        """
+        try:
+            if self.is_file:
+                if self.format == "json":
+                    return _table_rows_with_errors(json.loads(self.path.read_text()))
+                return self.rows(), []
+            return _table_rows_with_errors(self.value)
+        except Exception as exc:
+            return [], [str(exc)]
 
     @classmethod
     def from_rows(cls, rows: Iterable[Dict[str, Any]], path: Optional[Path] = None,

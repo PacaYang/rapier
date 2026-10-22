@@ -17,7 +17,7 @@ class TaskRunner:
     Executes individual tasks.
 
     Handles the complete task lifecycle:
-    1. Validation (inputs, environment)
+    1. Validation and staging of inputs (runtime dependencies are checked in execute)
     2. Preparation (working directory, input files)
     3. Submission (SLURM job generation and submission)
     4. Monitoring (job status tracking)
@@ -78,7 +78,7 @@ class TaskRunner:
         """
         Prepare task for execution.
 
-        Validates inputs and environment, creates working directory.
+        Validates and stages inputs, creates working directory.
 
         Args:
             task: Task to prepare
@@ -119,9 +119,6 @@ class TaskRunner:
             if not is_valid:
                 raise ValueError(f"Input validation failed: {', '.join(errors)}")
 
-            is_valid, errors = task.method.validate_environment()
-            if not is_valid:
-                raise ValueError(f"Environment validation failed: {', '.join(errors)}")
         else:
             task.inputs = raw_inputs
 
@@ -218,6 +215,8 @@ class TaskRunner:
                 # Methods return outputs already arranged as typed artifacts.
                 task.outputs = dict(task.method.collect_outputs(task))
             except Exception as e:
+                task.outputs = {}
+                task.status = TaskStatus.FAILED
                 task.error_message = f"Failed to collect outputs: {e}"
 
         # Read log files

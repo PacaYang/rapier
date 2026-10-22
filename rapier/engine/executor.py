@@ -207,7 +207,12 @@ class ExecutionEngine:
             try:
                 self.runner.collect_task_results(task)
             except Exception as e:
+                task.outputs = {}
+                task.status = TaskStatus.FAILED
+                task.error_message = f"Failed to collect outputs: {e}"
                 print(f"  Failed to collect results: {e}")
+            if task.status == TaskStatus.FAILED:
+                status = TaskStatus.FAILED
 
         # Mark completed
         self.scheduler.mark_completed(task, status)

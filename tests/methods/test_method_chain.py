@@ -115,6 +115,7 @@ def test_smina_outputs_match_vina_shape(tmp_path, sample_data_dir, monkeypatch):
         return 0, "mode |   affinity | dist from best mode\n-----+----\n1  -7.3  0.000  0.000\n", ""
 
     monkeypatch.setattr(smina, "run_command", fake_smina)
+    monkeypatch.setattr(smina.SminaDocking, "validate_environment", lambda self: (True, []))
     out = _run(smina.SminaDocking(), {
         "receptor": str(sample_data_dir / "receptor.pdb"), "ligands": str(sample_data_dir / "ligands.sdf"),
         "binding_site": {"center": [0, 0, 0], "size": [20, 20, 20]},
@@ -135,6 +136,7 @@ def test_protein_prep_returns_typed_receptor(tmp_path, sample_data_dir, monkeypa
         return 0, "", ""
 
     monkeypatch.setattr(protein_prep, "run_command", fake_obabel)
+    monkeypatch.setattr(protein_prep.ProteinPreparation, "validate_environment", lambda self: (True, []))
     out = _run(protein_prep.ProteinPreparation(), {"receptor": str(sample_data_dir / "receptor.pdb")}, tmp_path, "prep")
     assert isinstance(out["prepared_receptor"], ProteinStructure)
     assert out["prepared_receptor"].format == "pdbqt"

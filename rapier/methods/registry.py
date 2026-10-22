@@ -58,14 +58,25 @@ class MethodRegistry:
             metadata: Optional metadata about the method
 
         Raises:
-            ValueError: If name is already registered or method_class is invalid
+            ValueError: If name is already registered, method_class is invalid,
+                or either required validation hook resolves to the Method default.
         """
         if name in self._methods:
             raise ValueError(f"Method '{name}' is already registered")
 
-        if not issubclass(method_class, Method):
+        if not inspect.isclass(method_class) or not issubclass(method_class, Method):
             raise ValueError(
                 f"Method class must inherit from Method, got {method_class}"
+            )
+
+        missing = [hook for hook in ("check_dependencies", "validate_outputs")
+                   if not callable(getattr(method_class, hook, None))
+                   or getattr(getattr(method_class, hook, None), "__isabstractmethod__", False)
+                   or getattr(method_class, hook, None) is getattr(Method, hook)]
+        if missing:
+            raise ValueError(
+                f"Method class {method_class.__name__} must implement "
+                f"{', '.join(missing)} after examining its input/output contract"
             )
 
         self._methods[name] = method_class
@@ -215,8 +226,12 @@ class MethodRegistry:
                         # Check for register_name attribute
                         register_name = getattr(obj, 'register_name', None)
                         if register_name and not self.has(register_name):
-                            self.register(register_name, obj)
-                            discovered_count += 1
+                            try:
+                                self.register(register_name, obj)
+                            except ValueError as exc:
+                                print(f"Warning: Failed to register {obj.__name__}: {exc}")
+                            else:
+                                discovered_count += 1
 
             except Exception as e:
                 # Log but don't fail on import errors

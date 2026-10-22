@@ -136,14 +136,21 @@ class _PortMap:
                     errors.append(f"{label} '{name}' must contain multiple artifacts")
                     continue
             else:
-                items = [items]
+                if isinstance(items, (list, tuple)):
+                    errors.append(f"{label} '{name}' expects one artifact, received {len(items)}")
+                else:
+                    items = [items]
             for item in items:
                 if not isinstance(item, Artifact):
                     errors.append(f"{label} '{name}' must be a normalized Artifact")
                     continue
-                valid, item_errors = registry.validate(item)
-                errors.extend(f"{label} '{name}': {error}" for error in item_errors)
-                if valid and not port.accepts(item, registry):
+                try:
+                    valid, item_errors = registry.validate(item)
+                except Exception as exc:
+                    errors.append(f"{label} '{name}': Artifact validation failed: {exc}")
+                else:
+                    errors.extend(f"{label} '{name}': {error}" for error in item_errors)
+                if not port.accepts(item, registry):
                     errors.append(
                         f"{label} '{name}' {verb} {item.type}/{item.format}; expected types "
                         f"{list(port.types)} and formats {list(port.formats) or 'any'}"
