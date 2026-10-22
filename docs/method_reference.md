@@ -36,6 +36,12 @@ outside `A-Za-z0-9_.-` replaced by `_`), and every score table is keyed by
 | `smina_docking` | `SminaDocking` | Yes | Smina docking with custom scoring |
 | `boltz2` | `Boltz2Prediction` | No | Boltz-2 structure and affinity prediction |
 | `boltz2_prediction` | `Boltz2PredictionMethod` | No | Alias of `boltz2` |
+| `af3` | `AF3Prediction` | No | AlphaFold 3 structures and confidence for each ligand |
+| `drug_lamp` | `DrugLAMP` | No | Drug-target interaction probabilities |
+| `nesso` | `NessoPrediction` | No | Nesso-1 binding affinity and optional pair representations |
+
+See the [AF3, DrugLAMP, and Nesso guide](predictors.md) for their input checks,
+dependencies, configuration, validated output contracts, and example pipelines.
 
 Every method runs on SLURM through `python -m rapier.methods.runner` (see
 [Running on SLURM](method_development_guide.md#running-on-slurm)). Vina and Boltz2

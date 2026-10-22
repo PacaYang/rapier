@@ -1,0 +1,36 @@
+name: nesso_prediction
+description: Screen two ligands for binding affinity with Nesso-1
+version: 1.0.0
+
+inputs:
+  protein:
+    type: sequence.protein
+    format: inline
+    value: MKTAYIAKQRQISFVKSHFSRQ
+  ligands:
+    type: molecule.collection
+    format: smiles
+    value: ["CCO ethanol", "CCN ethylamine"]
+
+methods:
+  - id: predict
+    type: nesso
+    inputs:
+      protein: pipeline.protein
+      ligands: pipeline.ligands
+    config:
+      conda_env: nesso
+      accelerator: gpu
+      no_kernels: true
+      save_metadata: false
+      allow_partial_failures: true
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 32GB
+      time_limit: 12h
+
+outputs:
+  affinity_scores: predict.affinity_scores
+  scores: predict.scores
+  run_summary: predict.run_summary

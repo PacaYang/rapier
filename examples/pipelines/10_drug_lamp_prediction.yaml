@@ -1,0 +1,36 @@
+name: drug_lamp_prediction
+description: Screen two ligands for drug-target interactions with DrugLAMP
+version: 1.0.0
+
+inputs:
+  protein:
+    type: sequence.protein
+    format: inline
+    value: MKTAYIAKQRQISFVKSHFSRQ
+  ligands:
+    type: molecule.collection
+    format: smiles
+    value: ["CCO ethanol", "CCN ethylamine"]
+
+methods:
+  - id: predict
+    type: drug_lamp
+    inputs:
+      protein: pipeline.protein
+      ligands: pipeline.ligands
+    config:
+      conda_env: drug_lamp_test
+      model: DrugLAMP
+      n_layer: 30
+      device: cuda
+      allow_partial_failures: true
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 32GB
+      time_limit: 12h
+
+outputs:
+  predictions: predict.predictions
+  scores: predict.scores
+  run_summary: predict.run_summary

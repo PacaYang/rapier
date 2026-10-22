@@ -1,0 +1,36 @@
+name: af3_prediction
+description: Screen two ligands independently with the installed AlphaFold 3
+version: 1.0.0
+
+inputs:
+  protein:
+    type: sequence.protein
+    format: inline
+    value: MKTAYIAKQRQISFVKSHFSRQ
+  ligands:
+    type: molecule.collection
+    format: smiles
+    value: ["CCO ethanol", "CCN ethylamine"]
+
+methods:
+  - id: predict
+    type: af3
+    inputs:
+      protein: pipeline.protein
+      ligands: pipeline.ligands
+    config:
+      conda_env: af3_test
+      model_seeds: [1]
+      num_diffusion_samples: 1
+      allow_partial_failures: true
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 64GB
+      time_limit: 24h
+
+outputs:
+  structures: predict.predicted_structures
+  best_structures: predict.best_structures
+  scores: predict.scores
+  run_summary: predict.run_summary

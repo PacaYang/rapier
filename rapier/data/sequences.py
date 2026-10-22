@@ -1,5 +1,6 @@
 """Biological sequence data types."""
 
+import errno
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence as Formats
@@ -27,16 +28,34 @@ class Sequence(Artifact):
         return []
 
     @classmethod
-    def from_string(cls, sequence: str, metadata: Optional[Dict[str, Any]] = None) -> "Sequence":
+    def from_string(
+        cls, sequence: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> "Sequence":
         return cls.inline(re.sub(r"\s+", "", sequence), "inline", metadata)
 
     @classmethod
-    def coerce(cls, value: Any, *, type_name: Optional[str] = None, formats: Formats = (),
-               directory: Optional[Path] = None, stem: str = "data") -> Artifact:
+    def coerce(
+        cls,
+        value: Any,
+        *,
+        type_name: Optional[str] = None,
+        formats: Formats = (),
+        directory: Optional[Path] = None,
+        stem: str = "data",
+    ) -> Artifact:
         # A bare residue string is a sequence, not a file name.
-        if isinstance(value, str) and not Path(value).suffix and not Path(value).exists():
-            return cls.inline(value.strip(), "inline", type_name=type_name)
-        return super().coerce(value, type_name=type_name, formats=formats, directory=directory, stem=stem)
+        if isinstance(value, str) and not Path(value).suffix:
+            try:
+                exists = Path(value).exists()
+            except OSError as exc:
+                if exc.errno != errno.ENAMETOOLONG:
+                    raise
+                exists = False
+            if not exists:
+                return cls.inline(value.strip(), "inline", type_name=type_name)
+        return super().coerce(
+            value, type_name=type_name, formats=formats, directory=directory, stem=stem
+        )
 
     @property
     def sequence(self) -> str:

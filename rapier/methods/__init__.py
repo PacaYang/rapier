@@ -24,37 +24,40 @@ from .screening import LigandFilter, MoleculeFilter, SimilaritySearch
 from .preparation import LigandPreparation, ProteinPreparation
 from .docking import VinaDocking, SminaDocking
 from .prediction import Boltz2, Boltz2Prediction, Boltz2PredictionMethod
-
+from .prediction import AF3Prediction, DrugLAMP, NessoPrediction
 
 __all__ = [
     # Base class and mixins
-    'Method',
-    'MethodError',
-    'RunContext',
-    'ParallelizableMethod',
-    'CheckpointableMethod',
+    "Method",
+    "MethodError",
+    "RunContext",
+    "ParallelizableMethod",
+    "CheckpointableMethod",
     # Registry
-    'MethodRegistry',
-    'get_registry',
+    "MethodRegistry",
+    "get_registry",
     # Utilities
-    'parse_box_spec',
-    'check_executable',
-    'check_executables',
-    'validate_pdb_file',
-    'validate_sdf_file',
-    'parse_vina_output',
+    "parse_box_spec",
+    "check_executable",
+    "check_executables",
+    "validate_pdb_file",
+    "validate_sdf_file",
+    "parse_vina_output",
     # Screening methods
-    'LigandFilter',
-    'MoleculeFilter',
-    'SimilaritySearch',
+    "LigandFilter",
+    "MoleculeFilter",
+    "SimilaritySearch",
     # Preparation methods
-    'LigandPreparation',
-    'ProteinPreparation',
+    "LigandPreparation",
+    "ProteinPreparation",
     # Docking methods
-    'VinaDocking',
-    'SminaDocking',
+    "VinaDocking",
+    "SminaDocking",
     # Prediction methods
-    'Boltz2Prediction',
-    'Boltz2',
-    'Boltz2PredictionMethod',
+    "Boltz2Prediction",
+    "Boltz2",
+    "Boltz2PredictionMethod",
+    "AF3Prediction",
+    "DrugLAMP",
+    "NessoPrediction",
 ]
