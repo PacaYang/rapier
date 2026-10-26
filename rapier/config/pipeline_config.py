@@ -5,10 +5,11 @@ Represents a complete pipeline configuration, parsed and validated.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from .method_config import MethodConfig, ConnectionConfig, PoolingRuleConfig
+from .workflow_metadata import WorkflowMetadata
 from rapier.artifacts import Artifact, ArtifactStorage
-
 
 _UNSET = object()
 
@@ -48,32 +49,35 @@ class ArtifactConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
-            'type': self.type,
-            'format': self.format,
-            'metadata': self.metadata,
+            "type": self.type,
+            "format": self.format,
+            "metadata": self.metadata,
         }
         if self.source is not None:
-            result['source'] = self.source
+            result["source"] = self.source
         else:
-            result['value'] = self.value
+            result["value"] = self.value
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], project_dir: Optional[str] = None) -> 'ArtifactConfig':
-        source = data.get('source')
+    def from_dict(
+        cls, data: Dict[str, Any], project_dir: Optional[str] = None
+    ) -> "ArtifactConfig":
+        source = data.get("source")
         if source is not None and project_dir:
             from pathlib import Path
+
             source_path = Path(source)
             if not source_path.is_absolute():
                 source = str(Path(project_dir) / source_path)
         kwargs = {
-            'type': data['type'],
-            'format': data['format'],
-            'source': source,
-            'metadata': data.get('metadata', {}),
+            "type": data["type"],
+            "format": data["format"],
+            "source": source,
+            "metadata": data.get("metadata", {}),
         }
-        if 'value' in data:
-            kwargs['value'] = data['value']
+        if "value" in data:
+            kwargs["value"] = data["value"]
         return cls(**kwargs)
 
 
@@ -103,14 +107,24 @@ class PipelineConfig:
     environment: Dict[str, Any] = field(default_factory=dict)
     inputs: Dict[str, ArtifactConfig] = field(default_factory=dict)
     outputs: Dict[str, str] = field(default_factory=dict)
+    metadata: WorkflowMetadata = field(default_factory=WorkflowMetadata)
+    metadata_file: Optional[str] = None
 
     def __post_init__(self):
         """Validate pipeline configuration after initialization."""
         if not self.name:
             raise ValueError("Pipeline name cannot be empty")
+        if isinstance(self.metadata, dict):
+            self.metadata = WorkflowMetadata.from_dict(self.metadata)
+        if not isinstance(self.metadata, WorkflowMetadata):
+            raise ValueError("Pipeline metadata must be WorkflowMetadata or a mapping")
+        if self.metadata_file is not None and (
+            not isinstance(self.metadata_file, str) or not self.metadata_file.strip()
+        ):
+            raise ValueError("metadata_file must be a non-empty path string")
         if not self.methods:
             raise ValueError("Pipeline must have at least one method")
-        if self.failure_policy not in ('stop', 'continue', 'retry'):
+        if self.failure_policy not in ("stop", "continue", "retry"):
             raise ValueError(f"Invalid failure_policy: {self.failure_policy}")
         for name, reference in self.outputs.items():
             if not isinstance(name, str) or not name:
@@ -158,9 +172,9 @@ class PipelineConfig:
         method = self.get_method(method_id)
         if method:
             for reference in method.inputs.values():
-                if reference.startswith('pipeline.'):
+                if reference.startswith("pipeline."):
                     continue
-                source, separator, _ = reference.partition('.')
+                source, separator, _ = reference.partition(".")
                 if separator and source not in upstream:
                     upstream.append(source)
         return upstream
@@ -184,32 +198,39 @@ class PipelineConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
         result = {
-            'name': self.name,
-            'methods': [m.to_dict() for m in self.methods],
+            "name": self.name,
+            "methods": [m.to_dict() for m in self.methods],
+            "metadata": self.metadata.to_dict(),
         }
+        if self.metadata_file is not None:
+            result["metadata_file"] = self.metadata_file
 
         if self.inputs:
-            result['inputs'] = {name: value.to_dict() for name, value in self.inputs.items()}
+            result["inputs"] = {
+                name: value.to_dict() for name, value in self.inputs.items()
+            }
         if self.outputs:
-            result['outputs'] = dict(self.outputs)
+            result["outputs"] = dict(self.outputs)
 
         if self.description:
-            result['description'] = self.description
+            result["description"] = self.description
         if self.version:
-            result['version'] = self.version
+            result["version"] = self.version
         if self.connections:
-            result['connections'] = [c.to_dict() for c in self.connections]
+            result["connections"] = [c.to_dict() for c in self.connections]
         if self.pooling_rules:
-            result['pooling_rules'] = {k: v.to_dict() for k, v in self.pooling_rules.items()}
-        if self.failure_policy != 'stop':
-            result['failure_policy'] = self.failure_policy
+            result["pooling_rules"] = {
+                k: v.to_dict() for k, v in self.pooling_rules.items()
+            }
+        if self.failure_policy != "stop":
+            result["failure_policy"] = self.failure_policy
         if self.environment:
-            result['environment'] = self.environment
+            result["environment"] = self.environment
 
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'PipelineConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "PipelineConfig":
         """
         Create PipelineConfig from dictionary.
 
@@ -219,36 +240,54 @@ class PipelineConfig:
         Returns:
             PipelineConfig instance
         """
-        methods = [MethodConfig.from_dict(m) for m in data['methods']]
+        methods = [MethodConfig.from_dict(m) for m in data["methods"]]
 
-        project_dir = data.get('environment', {}).get('project_dir')
+        project_dir = data.get("environment", {}).get("project_dir")
         inputs = {
             name: ArtifactConfig.from_dict(value, project_dir=project_dir)
-            for name, value in data.get('inputs', {}).items()
+            for name, value in data.get("inputs", {}).items()
         }
 
         connections = []
-        if 'connections' in data:
-            connections = [ConnectionConfig.from_dict(c) for c in data['connections']]
+        if "connections" in data:
+            connections = [ConnectionConfig.from_dict(c) for c in data["connections"]]
 
         pooling_rules = {}
-        if 'pooling_rules' in data:
+        if "pooling_rules" in data:
             pooling_rules = {
                 k: PoolingRuleConfig.from_dict(v)
-                for k, v in data['pooling_rules'].items()
+                for k, v in data["pooling_rules"].items()
             }
 
+        metadata_base_dir = data.get("_metadata_base_dir")
+        if metadata_base_dir is None:
+            if data.get("metadata_file") and project_dir:
+                metadata_base_dir = str(
+                    (Path(project_dir) / data["metadata_file"]).resolve().parent
+                )
+            else:
+                metadata_base_dir = project_dir
+
         return cls(
-            name=data['name'],
-            description=data.get('description'),
-            version=data.get('version'),
+            name=data["name"],
+            description=data.get("description"),
+            version=data.get("version"),
             methods=methods,
             connections=connections,
             pooling_rules=pooling_rules,
-            failure_policy=data.get('failure_policy', 'stop'),
-            environment=data.get('environment', {}),
+            failure_policy=data.get("failure_policy", "stop"),
+            environment=data.get("environment", {}),
             inputs=inputs,
-            outputs=data.get('outputs', {}),
+            outputs=data.get("outputs", {}),
+            metadata=(
+                WorkflowMetadata.from_dict(
+                    data["metadata"],
+                    base_dir=metadata_base_dir,
+                )
+                if "metadata" in data
+                else WorkflowMetadata(base_dir=project_dir)
+            ),
+            metadata_file=data.get("metadata_file"),
         )
 
     def to_pipeline(self):
@@ -263,4 +302,5 @@ class PipelineConfig:
             the Pipeline class from rapier.core.pipeline
         """
         from rapier.core.pipeline import Pipeline
+
         return Pipeline.from_config(self)

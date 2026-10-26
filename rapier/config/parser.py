@@ -7,6 +7,7 @@ Handles parsing, variable substitution, and includes.
 import os
 import re
 import yaml
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .pipeline_config import PipelineConfig
@@ -28,6 +29,7 @@ class ConfigParser:
             project_dir: Base directory for resolving relative paths
         """
         self.project_dir = project_dir or os.getcwd()
+        self._explicit_project_dir = project_dir is not None
         self.variables: Dict[str, str] = {}
 
     def parse_file(self, file_path: str) -> PipelineConfig:
@@ -49,10 +51,10 @@ class ConfigParser:
             raise FileNotFoundError(f"Configuration file not found: {file_path}")
 
         # Update project_dir based on config file location
-        if self.project_dir == os.getcwd():
+        if not self._explicit_project_dir:
             self.project_dir = str(path.parent.absolute())
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             content = f.read()
 
         return self.parse_string(content)
@@ -95,17 +97,37 @@ class ConfigParser:
             PipelineConfig instance
         """
         # Store environment variables if present
-        if 'environment' in data and 'variables' in data['environment']:
-            self.variables.update(data['environment']['variables'])
+        data = deepcopy(data)
+        if "environment" in data and "variables" in data["environment"]:
+            self.variables.update(data["environment"]["variables"])
 
         # Add project_dir to environment
-        if 'environment' not in data:
-            data['environment'] = {}
-        data['environment']['project_dir'] = self.project_dir
+        if "environment" not in data:
+            data["environment"] = {}
+        data["environment"]["project_dir"] = self.project_dir
 
         # Process includes if present
-        if 'include' in data:
+        if "include" in data:
             data = self._process_includes(data)
+
+        if "metadata_file" in data:
+            reference = data["metadata_file"]
+            if not isinstance(reference, str) or not reference.strip():
+                raise ValueError("metadata_file must be a non-empty path string")
+            metadata_path = Path(self.project_dir) / reference
+            if not metadata_path.is_file():
+                raise FileNotFoundError(
+                    f"Workflow metadata file not found: {metadata_path}"
+                )
+            try:
+                metadata = yaml.safe_load(
+                    self._substitute_variables(metadata_path.read_text())
+                )
+            except yaml.YAMLError as exc:
+                raise ValueError(f"Failed to parse workflow metadata: {exc}") from exc
+            # A companion file is authoritative over an inline snapshot.
+            data["metadata"] = metadata
+            data["_metadata_base_dir"] = str(metadata_path.resolve().parent)
 
         return PipelineConfig.from_dict(data)
 
@@ -124,13 +146,13 @@ class ConfigParser:
             Content with substituted variables
         """
         # Pattern to match ${VAR_NAME}
-        pattern = r'\$\{([^}]+)\}'
+        pattern = r"\$\{([^}]+)\}"
 
         def replace_var(match):
             var_name = match.group(1)
 
             # Check if it's PROJECT_DIR
-            if var_name == 'PROJECT_DIR':
+            if var_name == "PROJECT_DIR":
                 return self.project_dir
 
             # Check custom variables
@@ -156,7 +178,7 @@ class ConfigParser:
         Returns:
             Merged configuration dictionary
         """
-        includes = data.pop('include', [])
+        includes = data.pop("include", [])
         if isinstance(includes, str):
             includes = [includes]
 
@@ -167,7 +189,7 @@ class ConfigParser:
             if not full_path.exists():
                 raise FileNotFoundError(f"Included file not found: {include_path}")
 
-            with open(full_path, 'r') as f:
+            with open(full_path, "r") as f:
                 included_data = yaml.safe_load(f)
 
             # Merge included data (current data takes precedence)
@@ -175,7 +197,9 @@ class ConfigParser:
 
         return data
 
-    def _merge_configs(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_configs(
+        self, base: Dict[str, Any], override: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Merge two configuration dictionaries.
 
@@ -189,9 +213,17 @@ class ConfigParser:
         result = base.copy()
 
         for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 result[key] = self._merge_configs(result[key], value)
-            elif key in result and isinstance(result[key], list) and isinstance(value, list):
+            elif (
+                key in result
+                and isinstance(result[key], list)
+                and isinstance(value, list)
+            ):
                 # Append lists
                 result[key] = result[key] + value
             else:
@@ -217,3 +249,4 @@ class ConfigParser:
             project_dir: Project directory path
         """
         self.project_dir = project_dir
+        self._explicit_project_dir = True

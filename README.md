@@ -183,9 +183,13 @@ through `ExecutionEngine` as shown above.
 | `similarity_search` | Fingerprint-based Tanimoto similarity search |
 | `ligand_prep` | 3D conformer generation, protonation, minimization |
 | `protein_prep` | Receptor preparation and PDBQT conversion |
+| `colabfold_msa` | Generate chain-specific protein MSAs through the ColabFold MSA Server |
 | `vina_docking` | AutoDock Vina docking with Meeko preparation/export |
 | `smina_docking` | Smina docking with custom scoring |
 | `boltz2` | Boltz-2 complex and affinity prediction (also registered as `boltz2_prediction`) |
+| `af3` | AlphaFold 3 structure prediction with optional supplied MSAs |
+| `drug_lamp` | Drug-target interaction prediction with DrugLAMP |
+| `nesso` | Nesso protein-ligand affinity prediction |
 
 ## Example Pipelines
 
@@ -199,6 +203,10 @@ Ready-to-run configurations live in [`examples/pipelines/`](examples/pipelines/)
 - `06_boltz2_prediction.yaml` — Boltz-2 structure and affinity prediction
 - `07_boltz2_vina.yaml` — Boltz-2-predicted receptor and binding box passed to Vina
 - `08_docking_funnel.yaml` — two-round Vina docking funnel gated by `molecule_filter`
+- `09_af3_prediction.yaml` — AlphaFold 3 structure prediction from protein sequences
+- `10_drug_lamp_prediction.yaml` — DrugLAMP protein-ligand interaction prediction
+- `11_nesso_prediction.yaml` — Nesso affinity prediction
+- `12_colabfold_msa.yaml` — Generate a ColabFold MSA set and reuse it in AF3 and Boltz-2
 - `simple_serial.yaml`, `multi_step_method.yaml`, `parallel_pooling.yaml` — minimal serial, multi-step, and pooling topologies
 
 All examples can also be opened in the [workflow builder](#workflow-builder) from its *Example* menu.

@@ -15,10 +15,11 @@ import yaml
 from rapier.core.enums import TaskStatus
 from rapier.core.method import RunContext
 from rapier.core.task import Task
-from rapier.data import Molecule, Molecules
+from rapier.data import File, Molecule, Molecules
 from rapier.methods import AF3Prediction, DrugLAMP, NessoPrediction, get_registry
 from rapier.methods.prediction._external import ExternalPrediction, ligand_inventory
 from rapier.methods.prediction.nesso import _validate_tensors
+from rapier.methods.prediction._worker import af3_options
 from rapier.methods.runner import read_outputs, run_task_file
 
 METHODS = [AF3Prediction, DrugLAMP, NessoPrediction]
@@ -61,6 +62,15 @@ def _cif(offset):
 
 def _af3_outputs(directory, samples):
     document = json.loads((directory / "input.json").read_text())
+    chains = [
+        chain
+        for entity in document["sequences"]
+        for payload in entity.values()
+        for chain in (
+            payload["id"] if isinstance(payload["id"], list) else [payload["id"]]
+        )
+    ]
+    count = len(chains)
     root = directory / "native" / "job"
     root.mkdir(parents=True)
     ranking = []
@@ -70,25 +80,35 @@ def _af3_outputs(directory, samples):
             sub = root / f"seed-{seed}_sample-{sample}"
             sub.mkdir()
             prefix = f"job_seed-{seed}_sample-{sample}"
-            (sub / f"{prefix}_model.cif").write_text(_cif(sample + 1))
+            cif = _cif(sample + 1)
+            if chains != ["A", "B"]:
+                cif = cif[: cif.index("A CA")]
+                cif += (
+                    "".join(
+                        f"{chain} CA {sample + index} 1 2\n"
+                        for index, chain in enumerate(chains)
+                    )
+                    + "#\n"
+                )
+            (sub / f"{prefix}_model.cif").write_text(cif)
             summary = {
                 "ranking_score": score,
                 "ptm": 0.7,
                 "iptm": 0.8,
                 "fraction_disordered": 0.1,
                 "has_clash": 0,
-                "chain_ptm": [0.7, 0.8],
-                "chain_iptm": [0.8, 0.8],
-                "chain_pair_pae_min": [[0, 2], [2, 0]],
-                "chain_pair_iptm": [[None, 0.8], [0.8, None]],
+                "chain_ptm": [0.7] * count,
+                "chain_iptm": [0.8] * count,
+                "chain_pair_pae_min": [[0] * count for _ in chains],
+                "chain_pair_iptm": [[0.8] * count for _ in chains],
             }
             full = {
-                "atom_chain_ids": ["A", "B"],
-                "atom_plddts": [80, 90],
-                "token_chain_ids": ["A", "B"],
-                "token_res_ids": [1, 1],
-                "pae": [[0, 2], [2, 0]],
-                "contact_probs": [[1, 0.8], [0.8, 1]],
+                "atom_chain_ids": chains,
+                "atom_plddts": [80] * count,
+                "token_chain_ids": chains,
+                "token_res_ids": [1] * count,
+                "pae": [[0] * count for _ in chains],
+                "contact_probs": [[1] * count for _ in chains],
             }
             _write_json(sub / f"{prefix}_summary_confidences.json", summary)
             _write_json(sub / f"{prefix}_confidences.json", full)
@@ -147,6 +167,7 @@ def _fake_worker(self, request, directory=None):
             if request.get("source")
             else request["document"]
         )
+        document = af3_options(document, request)
         if request.get("destination"):
             _write_json(Path(request["destination"]), document)
         return {"document": document}
@@ -198,12 +219,19 @@ def fake_apps(monkeypatch):
     monkeypatch.setattr(ExternalPrediction, "_command", _fake_command)
 
 
+def _protein_port(method_class):
+    return "proteins" if method_class is AF3Prediction else "protein"
+
+
 def _task(tmp_path, method_class, config=None, ligands=None):
     method = method_class(config=config or {})
     task = Task(
         "predict",
         method,
-        {"protein": "ACDE", "ligands": ligands or ["CCO ethanol", "CCN ethanol"]},
+        {
+            _protein_port(method_class): "ACDE",
+            "ligands": ligands or ["CCO ethanol", "CCN ethanol"],
+        },
     )
     task.work_dir = tmp_path / "work"
     return task
@@ -216,10 +244,15 @@ def test_registration_and_input_checks_without_scientific_packages(method_class)
     assert registry.get(method_class.register_name) is method_class
     method = method_class()
     valid, errors = method.validate_inputs(
-        {"protein": "ACDE", "ligands": Molecule.inline("CCO ethanol", "smiles")}
+        {
+            _protein_port(method_class): "ACDE",
+            "ligands": Molecule.inline("CCO ethanol", "smiles"),
+        }
     )
     assert valid, errors
-    valid, errors = method.validate_inputs({"protein": "AC-D*", "ligands": ["CCO"]})
+    valid, errors = method.validate_inputs(
+        {_protein_port(method_class): "AC-D*", "ligands": ["CCO"]}
+    )
     assert not valid
     assert any("symbols" in error for error in errors)
 
@@ -230,7 +263,7 @@ def test_rejects_invalid_target_fasta(tmp_path, method_class, content):
     path = tmp_path / "target.fasta"
     path.write_text(content)
     valid, errors = method_class().validate_inputs(
-        {"protein": path, "ligands": ["CCO"]}
+        {_protein_port(method_class): path, "ligands": ["CCO"]}
     )
     assert not valid
     assert any("protein" in error for error in errors)
@@ -240,7 +273,9 @@ def test_rejects_invalid_target_fasta(tmp_path, method_class, content):
 def test_rejects_empty_libraries_and_unreadable_files(tmp_path, method_class):
     method = method_class()
     for ligands in ([], tmp_path / "missing.sdf"):
-        assert not method.validate_inputs({"protein": "ACDE", "ligands": ligands})[0]
+        assert not method.validate_inputs(
+            {_protein_port(method_class): "ACDE", "ligands": ligands}
+        )[0]
 
 
 def test_drug_lamp_prevents_sequence_truncation_and_unsupported_j():
@@ -280,7 +315,7 @@ def test_af3_native_modes_and_relative_references(tmp_path):
     prepared = method.format_inputs({"af3_input": path}, tmp_path / "staged")
     assert method.validate_inputs(prepared) == (True, [])
     valid, errors = method.validate_inputs(
-        {"af3_input": path, "protein": "ACDE", "ligands": ["CCO"]}
+        {"af3_input": path, "proteins": "ACDE", "ligands": ["CCO"]}
     )
     assert not valid and "mutually exclusive" in " ".join(errors)
     msa.unlink()
@@ -319,6 +354,195 @@ def test_af3_prepared_inputs_require_explicit_msas(tmp_path):
     _write_json(path, document)
     method = AF3Prediction(config={"run_data_pipeline": False})
     assert not method.validate_inputs({"af3_input": path})[0]
+
+
+def _msa(chain, sequence, hit=None):
+    return File.inline(
+        f">{chain}\n{sequence}\n>hit\n{hit or sequence}\n",
+        "a3m",
+        metadata={"chain_id": chain},
+    )
+
+
+@pytest.mark.parametrize("fasta", [False, True])
+def test_af3_multiple_chains_use_supplied_msa_and_disable_search(
+    tmp_path, fake_apps, monkeypatch, fasta
+):
+    task = _task(tmp_path, AF3Prediction, ligands=["CCO"])
+    task.inputs["proteins"] = ">A\nACDE\n>B\nGGGG\n" if fasta else ["ACDE", "GGGG"]
+    task.inputs["msa"] = [_msa("B", "GGGG"), _msa("A", "ACDE")]
+    commands = []
+
+    def capture(self, arguments, directory, label):
+        commands.append(arguments)
+        _fake_command(self, arguments, directory, label)
+
+    monkeypatch.setattr(ExternalPrediction, "_command", capture)
+    assert task.method.execute(task) == TaskStatus.COMPLETED, task.error_message
+    summary = task.outputs["run_summary"].load()
+    document = json.loads(
+        (Path(summary["cases"][0]["directory"]) / "input.json").read_text()
+    )
+    assert [entity[next(iter(entity))]["id"] for entity in document["sequences"]] == [
+        "A",
+        "B",
+        "C",
+    ]
+    for chain, sequence in zip(document["sequences"][:2], ("ACDE", "GGGG")):
+        protein = chain["protein"]
+        assert protein["unpairedMsa"].splitlines()[1] == sequence
+        assert protein["pairedMsa"] == ""
+        assert protein["templates"] == []
+    assert "--run_data_pipeline=false" in commands[0]
+    assert not task.method._searches(task.inputs)
+    assert not any(
+        label == "AF3 database"
+        for label, _, _ in task.method._required_paths(task.inputs)
+    )
+
+
+@pytest.mark.parametrize("use_templates", [False, True])
+def test_af3_without_msa_searches_all_protein_chains(
+    tmp_path, fake_apps, use_templates
+):
+    task = _task(tmp_path, AF3Prediction, {"use_templates": use_templates}, ["CCO"])
+    task.inputs["proteins"] = ["ACDE", "GGGG"]
+    assert task.method.execute(task) == TaskStatus.COMPLETED, task.error_message
+    summary = task.outputs["run_summary"].load()
+    document = json.loads(
+        (Path(summary["cases"][0]["directory"]) / "input.json").read_text()
+    )
+    for entity in document["sequences"][:2]:
+        protein = entity["protein"]
+        assert "unpairedMsa" not in protein
+        assert "pairedMsa" not in protein
+        assert protein.get("templates") == (None if use_templates else [])
+    assert "protein" in task.method._searches(task.inputs)
+    assert ("templates" in task.method._searches(task.inputs)) == use_templates
+
+
+def test_af3_native_msa_overrides_paths_templates_and_homomer_groups(
+    tmp_path, fake_apps
+):
+    document = _native_document()
+    protein = document["sequences"][0]["protein"]
+    protein.update(
+        id=["A", "B"],
+        unpairedMsa=">old\nAAAA\n",
+        pairedMsa=">old\nAAAA\n",
+        unpairedMsaPath="missing_unpaired.a3m",
+        pairedMsaPath="missing_paired.a3m",
+        templates=[{"mmcifPath": "missing.cif"}],
+    )
+    document["sequences"][1]["ligand"]["id"] = "C"
+    path = tmp_path / "native.json"
+    _write_json(path, document)
+    msas = [_msa("A", "ACDE", "AC-E"), _msa("B", "ACDE", "A-DE")]
+    method = AF3Prediction()
+    assert method.validate_inputs({"af3_input": path, "msa": msas}) == (True, [])
+    task = Task("native_msa", method, {"af3_input": path, "msa": msas})
+    task.work_dir = tmp_path / "native_work"
+    assert method.execute(task) == TaskStatus.COMPLETED, task.error_message
+    case_dir = Path(task.outputs["run_summary"].load()["cases"][0]["directory"])
+    staged = json.loads((case_dir / "input.json").read_text())
+    proteins = [
+        entity["protein"] for entity in staged["sequences"] if "protein" in entity
+    ]
+    assert [protein["id"] for protein in proteins] == ["A", "B"]
+    assert [protein["unpairedMsa"] for protein in proteins] == [
+        msa.value for msa in msas
+    ]
+    assert all(
+        protein["pairedMsa"] == "" and protein["templates"] == []
+        for protein in proteins
+    )
+    assert all(
+        "unpairedMsaPath" not in protein and "pairedMsaPath" not in protein
+        for protein in proteins
+    )
+    assert json.loads(path.read_text()) == document
+
+
+@pytest.mark.parametrize(
+    "msas, message",
+    [
+        ([_msa("A", "ACDE")], "every protein chain"),
+        ([_msa("A", "ACDE"), _msa("A", "ACDE")], "Duplicate MSA"),
+        ([_msa("A", "ACDE"), _msa("C", "GGGG")], "does not match a protein chain"),
+        ([_msa("A", "ACDE"), _msa("B", "AAAA")], "query sequence"),
+    ],
+)
+def test_af3_rejects_incomplete_or_incorrect_supplied_msa(msas, message):
+    valid, errors = AF3Prediction().validate_inputs(
+        {"proteins": ["ACDE", "GGGG"], "ligands": ["CCO"], "msa": msas}
+    )
+    assert not valid
+    assert message in " ".join(errors)
+
+
+def test_af3_optional_templates_clear_native_template_references(tmp_path):
+    document = _native_document()
+    document["sequences"][0]["protein"]["templates"] = [{"mmcifPath": "missing.cif"}]
+    path = tmp_path / "native.json"
+    _write_json(path, document)
+    assert not AF3Prediction().validate_inputs({"af3_input": path})[0]
+    assert AF3Prediction(config={"use_templates": False}).validate_inputs(
+        {"af3_input": path}
+    ) == (True, [])
+
+
+def test_af3_native_template_search_reuses_explicit_msa(tmp_path):
+    document = _native_document()
+    protein = document["sequences"][0]["protein"]
+    protein.update(unpairedMsa=">A\nACDE\n", pairedMsa="")
+    protein.pop("templates")
+    path = tmp_path / "native.json"
+    _write_json(path, document)
+    method = AF3Prediction()
+    inputs = {"af3_input": File.from_file(path, "json")}
+
+    assert method._searches(method.coerce_inputs(inputs)[0]) == {"templates"}
+
+
+def test_af3_worker_overrides_before_resolving_native_references(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from rapier.methods.prediction._worker import prepare_af3
+
+    document = _native_document()
+    document["sequences"][0]["protein"].update(
+        unpairedMsaPath="missing.a3m",
+        pairedMsaPath="missing.a3m",
+        templates=[{"mmcifPath": "missing.cif"}],
+    )
+    path = tmp_path / "native.json"
+    _write_json(path, document)
+    seen = []
+
+    def parse(payload, json_path):
+        parsed = json.loads(payload)
+        protein = parsed["sequences"][0]["protein"]
+        assert "unpairedMsaPath" not in protein and "pairedMsaPath" not in protein
+        assert protein["templates"] == []
+        seen.append(json_path)
+        return SimpleNamespace(to_json=lambda: json.dumps(parsed))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "alphafold3.common",
+        SimpleNamespace(
+            folding_input=SimpleNamespace(Input=SimpleNamespace(from_json=parse))
+        ),
+    )
+    result = prepare_af3(
+        {
+            "source": str(path),
+            "msa": {"A": ">A\nACDE\n"},
+            "use_templates": False,
+            "run_data_pipeline": False,
+        }
+    )
+    assert seen == [path]
+    assert result["document"]["sequences"][0]["protein"]["unpairedMsa"] == ">A\nACDE\n"
 
 
 @pytest.mark.parametrize("method_class", METHODS)
@@ -527,7 +751,7 @@ def test_missing_dependency_assets_are_actionable(tmp_path):
 @pytest.mark.parametrize("method_class", METHODS)
 def test_long_inline_molecules_are_not_treated_as_paths(method_class):
     valid, errors = method_class().validate_inputs(
-        {"protein": "ACDE", "ligands": ["C" * 300]}
+        {_protein_port(method_class): "ACDE", "ligands": ["C" * 300]}
     )
     assert valid, errors
 
@@ -621,7 +845,7 @@ def test_partial_malformed_sdf_records(tmp_path, method_class):
         "    0.0000    0.0000    0.0000 C   0  0  0  0  0\nM  END\n$$$$\n"
         "bad\nnot an SDF\n$$$$\n"
     )
-    inputs = {"protein": "ACDE", "ligands": path}
+    inputs = {_protein_port(method_class): "ACDE", "ligands": path}
     assert method_class().validate_inputs(inputs)[0]
     assert not method_class(config={"allow_partial_failures": False}).validate_inputs(
         inputs

@@ -2,6 +2,7 @@
 import {
   state, commit, esc, nodeById, methodInfo, portsOf, compatibility, connect, incomingEdge,
   removeEdge, removeNode, edgeStatus, typeColor, categoryColor, nodeErrors, findPort,
+  outputPathPlaceholder,
 } from './state.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -116,8 +117,24 @@ function cardHtml(node) {
     ${sub ? `<div class="card-sub">${sub}</div>` : ''}
     ${node.kind === 'input' ? `<div class="card-preview">${esc(preview(node))}</div>` : ''}
     ${node.kind === 'method' ? configChips(node, info) : ''}
+    ${node.kind === 'method' ? controllerSummary(node) : ''}
     ${inputs.length ? `<div class="ports">${inputs.map((p) => portRow(node, p, 'in')).join('')}</div>` : ''}
     ${outputs.length ? `<div class="ports">${outputs.map((p) => portRow(node, p, 'out')).join('')}</div>` : ''}`;
+}
+
+function controllerSummary(node) {
+  const resource = node.resource_controller || {};
+  const parts = [`${resource.cpus ?? 1} CPU${resource.cpus === 1 ? '' : 's'}`,
+    `${resource.gpus ?? 0} GPU${resource.gpus === 1 ? '' : 's'}`, resource.memory,
+    `${resource.nodes ?? 1} node${resource.nodes === 1 ? '' : 's'}`].filter((v) => v != null);
+  if (resource.partition) parts.push(resource.partition);
+  if (resource.gpu_type) parts.push(resource.gpu_type);
+  return `<div class="card-controller" aria-label="Attached resource controller">
+    <span class="controller-label">Resource controller</span>
+    <span>${esc(parts.join(' · '))}</span>
+    ${resource.time_limit ? `<span class="controller-time">Time limit ${esc(resource.time_limit)}</span>` : ''}
+    <span class="output-placeholder" title="${esc(outputPathPlaceholder(node))}">Output placeholder: <code>${esc(outputPathPlaceholder(node))}</code></span>
+  </div>`;
 }
 
 export function renderAll() {

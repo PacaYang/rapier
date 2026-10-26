@@ -19,34 +19,42 @@ from rapier.methods.runner import read_outputs, run_task_file
 
 @pytest.fixture(autouse=True)
 def available_mock_tools(monkeypatch):
-    monkeypatch.setattr(Boltz2Prediction, "validate_environment", lambda self: (True, []))
+    monkeypatch.setattr(
+        Boltz2Prediction, "validate_environment", lambda self: (True, [])
+    )
 
 
 def _task(tmp_path):
-    method = Boltz2Prediction(parameters={
-        "use_msa_server": True,
-        "affinity_binder": "B",
-        "diffusion_samples": 2,
-        "accelerator": "cpu",
-    })
+    method = Boltz2Prediction(
+        parameters={
+            "use_msa_server": True,
+            "affinity_binder": "B",
+            "diffusion_samples": 2,
+            "accelerator": "cpu",
+        }
+    )
     task = Task(
         task_id="boltz2_test",
         method=method,
         inputs={
-            "proteins": [Artifact(
-                "sequence.protein",
-                "inline",
-                "MKTAYIAKQRQISFVKSHFSRQ",
-                storage=ArtifactStorage.INLINE,
-                metadata={"chain_id": "A"},
-            )],
-            "ligands": [Artifact(
-                "molecule",
-                "smiles",
-                "CCO",
-                storage=ArtifactStorage.INLINE,
-                metadata={"chain_id": "B"},
-            )],
+            "proteins": [
+                Artifact(
+                    "sequence.protein",
+                    "inline",
+                    "MKTAYIAKQRQISFVKSHFSRQ",
+                    storage=ArtifactStorage.INLINE,
+                    metadata={"chain_id": "A"},
+                )
+            ],
+            "ligands": [
+                Artifact(
+                    "molecule",
+                    "smiles",
+                    "CCO",
+                    storage=ArtifactStorage.INLINE,
+                    metadata={"chain_id": "B"},
+                )
+            ],
         },
     )
     task.work_dir = tmp_path / "work"
@@ -62,7 +70,9 @@ def test_boltz2_contract_and_manifest(tmp_path):
     assert "-m rapier.methods.runner --task" in command
     assert not (task.work_dir / "boltz2_input.yaml").exists()
     method.prepare(task)
-    document = __import__("yaml").safe_load((task.work_dir / "boltz2_input.yaml").read_text())
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
 
     assert method.register_name == "boltz2"
     assert document["version"] == 1
@@ -90,7 +100,13 @@ def _fake_boltz(command, cwd):
     with zipfile.ZipFile(sample_dir / "plddt_boltz2_input_model_0.npz", "w") as handle:
         header = b"{'descr': '<f8', 'fortran_order': False, 'shape': (1,), }"
         header += b" " * ((16 - (10 + len(header) + 1) % 16) % 16) + b"\n"
-        handle.writestr("plddt.npy", b"\x93NUMPY\x01\x00" + struct.pack("<H", len(header)) + header + struct.pack("<d", 0.9))
+        handle.writestr(
+            "plddt.npy",
+            b"\x93NUMPY\x01\x00"
+            + struct.pack("<H", len(header))
+            + header
+            + struct.pack("<d", 0.9),
+        )
     return 0, "Boltz complete", ""
 
 
@@ -109,7 +125,9 @@ def test_boltz2_runner_collects_structure_confidence_and_affinity(
     assert task.outputs["run_summary"].format == "json"
 
 
-def test_boltz2_generic_runner_validates_once_and_collects_receipt(tmp_path, monkeypatch):
+def test_boltz2_generic_runner_validates_once_and_collects_receipt(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(boltz2_runner, "_run_boltz", _fake_boltz)
     task = _task(tmp_path)
     calls = []
@@ -144,7 +162,9 @@ def test_boltz2_missing_msa_stops_before_prediction(tmp_path, monkeypatch):
 @pytest.mark.parametrize("binder", ["missing", "A", None])
 def test_boltz2_affinity_property_requires_actual_ligand_binder(tmp_path, binder):
     task = _task(tmp_path)
-    task.method = Boltz2Prediction(config={"properties": [{"affinity": {"binder": binder}}]})
+    task.method = Boltz2Prediction(
+        config={"properties": [{"affinity": {"binder": binder}}]}
+    )
     ctx = RunContext.for_task(task)
     task.inputs = task.method.format_inputs(task.inputs, ctx.input_dir)
 
@@ -165,10 +185,12 @@ def test_boltz2_requires_all_configured_models(tmp_path, monkeypatch):
 
 def test_boltz2_pooled_validation_reports_independent_bad_outputs(tmp_path):
     task = _task(tmp_path)
-    method = Boltz2Prediction(config={
-        "emit_docking_inputs": True,
-        "properties": [{"affinity": {"binder": "B"}}],
-    })
+    method = Boltz2Prediction(
+        config={
+            "emit_docking_inputs": True,
+            "properties": [{"affinity": {"binder": "B"}}],
+        }
+    )
     task.method = method
     ctx = RunContext.for_task(task)
     model = tmp_path / "sample_model_0.cif"
@@ -184,9 +206,13 @@ def test_boltz2_pooled_validation_reports_independent_bad_outputs(tmp_path):
         "confidence_scores": [Report.from_file(confidence)],
         "affinity_scores": [Report.from_file(affinity)],
         "scores": Scores.inline([None, {"id": "unexpected"}], "json"),
-        "run_summary": Report.inline({"status": "failed", "structures": [str(model)]}, "json"),
+        "run_summary": Report.inline(
+            {"status": "failed", "structures": [str(model)]}, "json"
+        ),
         "vina_receptor": ProteinStructure.from_file(receptor),
-        "docking_box": BindingSite.inline({"center": [0, "nan", 0], "size": [1, -1, "bad"]}, "box"),
+        "docking_box": BindingSite.inline(
+            {"center": [0, "nan", 0], "size": [1, -1, "bad"]}, "box"
+        ),
     }
 
     errors = method.validate_outputs(task.inputs, outputs, ctx)
@@ -234,16 +260,20 @@ def test_boltz2_confidence_rows_must_match_report(tmp_path, monkeypatch):
     rows[0]["confidence_score"] = 0.1
     outputs["scores"] = Scores.inline(rows, "json")
 
-    errors = task.method.validate_outputs(task.inputs, outputs, RunContext.for_task(task))
+    errors = task.method.validate_outputs(
+        task.inputs, outputs, RunContext.for_task(task)
+    )
 
     assert any("confidence_score disagrees" in message for message in errors)
 
 
 def test_boltz2_requires_msa_without_server_or_single_sequence_mode(tmp_path):
-    method = Boltz2Prediction(parameters={
-        "use_msa_server": False,
-        "single_sequence_mode": False,
-    })
+    method = Boltz2Prediction(
+        parameters={
+            "use_msa_server": False,
+            "single_sequence_mode": False,
+        }
+    )
     task = _task(tmp_path)
     task.method = method
     valid, errors = method.validate_inputs(task.inputs)
@@ -259,43 +289,302 @@ def test_boltz2_requires_msa_without_server_or_single_sequence_mode(tmp_path):
 def test_boltz2_accepts_normalized_constraints_json(tmp_path):
     task = _task(tmp_path)
     constraints = tmp_path / "constraints.json"
-    constraints.write_text(json.dumps({
-        "constraints": [{
-            "pocket": {
-                "binder": "B",
-                "contacts": [["A", 1]],
-                "max_distance": 6,
+    constraints.write_text(
+        json.dumps(
+            {
+                "constraints": [
+                    {
+                        "pocket": {
+                            "binder": "B",
+                            "contacts": [["A", 1]],
+                            "max_distance": 6,
+                        }
+                    }
+                ]
             }
-        }]
-    }))
+        )
+    )
     task.inputs["constraints"] = Artifact("file", "json", constraints)
     task.method.prepare(task)
-    document = __import__("yaml").safe_load((task.work_dir / "boltz2_input.yaml").read_text())
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
     assert document["constraints"][0]["pocket"]["binder"] == "B"
 
 
 def test_boltz2_supports_ccd_ligand_artifacts(tmp_path):
     method = Boltz2Prediction()
     task = _task(tmp_path)
-    task.inputs["ligands"] = [Artifact(
-        "molecule", "ccd", "ATP", storage=ArtifactStorage.INLINE,
-        metadata={"chain_id": "B"},
-    )]
+    task.inputs["ligands"] = [
+        Artifact(
+            "molecule",
+            "ccd",
+            "ATP",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "B"},
+        )
+    ]
     method.prepare(task)
-    document = __import__("yaml").safe_load((task.work_dir / "boltz2_input.yaml").read_text())
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
     assert document["sequences"][1]["ligand"] == {"id": "B", "ccd": "ATP"}
 
 
 def test_boltz2_supports_identical_polymer_chain_ids(tmp_path):
     method = Boltz2Prediction()
     task = _task(tmp_path)
-    task.inputs["proteins"] = [Artifact(
-        "sequence.protein", "inline", "MKT", storage=ArtifactStorage.INLINE,
-        metadata={"chain_ids": ["A", "C"]},
-    )]
+    task.inputs["proteins"] = [
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "MKT",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_ids": ["A", "C"]},
+        )
+    ]
     method.prepare(task)
-    document = __import__("yaml").safe_load((task.work_dir / "boltz2_input.yaml").read_text())
-    assert document["sequences"][0]["protein"]["id"] == ["A", "C"]
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
+    assert [
+        item["protein"]["id"] for item in document["sequences"] if "protein" in item
+    ] == ["A", "C"]
+
+
+def _msa_artifact(chain_id, sequence, fmt="a3m"):
+    payload = f">query\n{sequence}\n>hit\n{sequence}\n"
+    return Artifact(
+        "file",
+        fmt,
+        payload,
+        storage=ArtifactStorage.INLINE,
+        metadata={"chain_id": chain_id},
+    )
+
+
+def test_boltz2_unified_msa_covers_multiple_protein_chains(tmp_path):
+    method = Boltz2Prediction()
+    task = _task(tmp_path)
+    task.inputs["proteins"] = [
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "MKT",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "A"},
+        ),
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "GGA",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "B"},
+        ),
+    ]
+    task.inputs["msa"] = [_msa_artifact("A", "MKT"), _msa_artifact("B", "GGA")]
+
+    method.prepare(task)
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
+    proteins = [item["protein"] for item in document["sequences"] if "protein" in item]
+
+    assert [(item["id"], item["sequence"]) for item in proteins] == [
+        ("A", "MKT"),
+        ("B", "GGA"),
+    ]
+    assert all(Path(item["msa"]).read_text().startswith(">query") for item in proteins)
+    manifest = json.loads((task.work_dir / "boltz2_manifest.json").read_text())
+    assert manifest["msa_supplied"] is True
+
+
+def test_boltz2_unified_msa_requires_exact_chain_coverage(tmp_path):
+    method = Boltz2Prediction()
+    task = _task(tmp_path)
+    task.inputs["proteins"] = [
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "MKT",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "A"},
+        ),
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "GGA",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "B"},
+        ),
+    ]
+    task.inputs["msa"] = [_msa_artifact("A", "MKT")]
+
+    with pytest.raises(ValueError, match="coverage|chain.*B"):
+        method.prepare(task)
+
+
+def test_boltz2_unified_msa_overrides_metadata_msa(tmp_path):
+    method = Boltz2Prediction()
+    task = _task(tmp_path)
+    old = tmp_path / "old.a3m"
+    old.write_text(">query\nMKT\n")
+    task.inputs["proteins"] = [
+        Artifact(
+            "sequence.protein",
+            "inline",
+            "MKT",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "A", "msa": str(old)},
+        )
+    ]
+    task.inputs["msa"] = [_msa_artifact("A", "MKT")]
+
+    method.prepare(task)
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
+    assert (
+        Path(document["sequences"][0]["protein"]["msa"]).read_text() != old.read_text()
+    )
+
+
+def test_boltz2_unified_msa_disables_templates(tmp_path):
+    method = Boltz2Prediction()
+    task = _task(tmp_path)
+    task.inputs["msa"] = [_msa_artifact("A", "MKTAYIAKQRQISFVKSHFSRQ")]
+    # This is deliberately inline and malformed as a Boltz template.  A
+    # supplied MSA must take precedence without trying to inspect it.
+    task.inputs["templates"] = [
+        Artifact(
+            "structure",
+            "pdb",
+            "missing template",
+            storage=ArtifactStorage.INLINE,
+            metadata={"chain_id": "A"},
+        )
+    ]
+
+    method.prepare(task)
+    document = __import__("yaml").safe_load(
+        (task.work_dir / "boltz2_input.yaml").read_text()
+    )
+    assert "templates" not in document
+
+
+def test_boltz2_unified_msa_drops_missing_template_before_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(boltz2_runner, "_run_boltz", _fake_boltz)
+    task = _task(tmp_path)
+    task.inputs["msa"] = [_msa_artifact("A", "MKTAYIAKQRQISFVKSHFSRQ")]
+    task.inputs["templates"] = [
+        Artifact.from_file(
+            tmp_path / "missing-template.pdb",
+            "pdb",
+            metadata={"chain_id": "A"},
+            type_name="structure",
+        )
+    ]
+
+    assert task.method.execute(task) == TaskStatus.COMPLETED, task.error_message
+
+
+def test_boltz2_direct_validation_drops_missing_template_with_msa(tmp_path):
+    method = Boltz2Prediction()
+    task = _task(tmp_path)
+    task.inputs["msa"] = [_msa_artifact("A", "MKTAYIAKQRQISFVKSHFSRQ")]
+    task.inputs["templates"] = [
+        Artifact.from_file(
+            tmp_path / "missing-template.pdb",
+            "pdb",
+            metadata={"chain_id": "A"},
+            type_name="structure",
+        )
+    ]
+
+    valid, errors = method.validate_inputs(task.inputs)
+    assert valid, errors
+
+
+def test_boltz2_run_manifest_disables_server_for_supplied_msa(tmp_path, monkeypatch):
+    input_yaml = tmp_path / "input.yaml"
+    input_yaml.write_text(
+        "version: 1\nsequences:\n"
+        "- protein:\n    id: A\n    sequence: MKT\n    msa: /tmp/A.a3m\n"
+        "templates:\n- pdb: /tmp/stale-template.pdb\n"
+    )
+    output_dir = tmp_path / "output"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "work_dir": str(tmp_path),
+                "input_yaml": str(input_yaml),
+                "output_dir": str(output_dir),
+                "sample_name": "input",
+                "msa_supplied": True,
+                "config": {
+                    "use_msa_server": True,
+                    "msa_server_url": "https://example.invalid",
+                    "msa_pairing_strategy": "greedy",
+                },
+            }
+        )
+    )
+    seen = {}
+
+    def fake_run(command, cwd):
+        seen["command"] = command
+        seen["document"] = __import__("yaml").safe_load(input_yaml.read_text())
+        prediction_dir = output_dir / "predictions" / "input"
+        prediction_dir.mkdir(parents=True)
+        (prediction_dir / "input_model_0.cif").write_text("data_model\n")
+        return 0, "ok", ""
+
+    monkeypatch.setattr(boltz2_runner, "_run_boltz", fake_run)
+    boltz2_runner.run_manifest(manifest)
+    assert "--use_msa_server" not in seen["command"]
+    assert "--msa_server_url" not in seen["command"]
+    assert "templates" not in seen["document"]
+
+
+def test_boltz2_run_manifest_keeps_server_without_unified_msa(tmp_path, monkeypatch):
+    input_yaml = tmp_path / "input.yaml"
+    input_yaml.write_text(
+        "version: 1\nsequences:\n" "- protein:\n    id: A\n    sequence: MKT\n"
+    )
+    output_dir = tmp_path / "output"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "work_dir": str(tmp_path),
+                "input_yaml": str(input_yaml),
+                "output_dir": str(output_dir),
+                "sample_name": "input",
+                "msa_supplied": False,
+                "config": {
+                    "use_msa_server": True,
+                    "msa_server_url": "https://example.invalid",
+                    "msa_pairing_strategy": "greedy",
+                },
+            }
+        )
+    )
+    seen = {}
+
+    def fake_run(command, cwd):
+        seen["command"] = command
+        prediction_dir = output_dir / "predictions" / "input"
+        prediction_dir.mkdir(parents=True)
+        (prediction_dir / "input_model_0.cif").write_text("data_model\n")
+        return 0, "ok", ""
+
+    monkeypatch.setattr(boltz2_runner, "_run_boltz", fake_run)
+    boltz2_runner.run_manifest(manifest)
+    assert "--use_msa_server" in seen["command"]
+    assert "--msa_server_url" in seen["command"]
 
 
 def _write_test_complex(path, ligand_offset=0.0):
@@ -307,7 +596,11 @@ def _write_test_complex(path, ligand_offset=0.0):
     residue = gemmi.Residue()
     residue.name = "ALA"
     residue.seqid = gemmi.SeqId(1, " ")
-    for name, xyz in (("N", (0.0, 0.0, 0.0)), ("CA", (1.5, 0.0, 0.0)), ("C", (2.0, 1.0, 0.0))):
+    for name, xyz in (
+        ("N", (0.0, 0.0, 0.0)),
+        ("CA", (1.5, 0.0, 0.0)),
+        ("C", (2.0, 1.0, 0.0)),
+    ):
         atom = gemmi.Atom()
         atom.name = name
         atom.element = gemmi.Element(name[0])
@@ -353,26 +646,37 @@ def test_boltz2_emits_receptor_and_combined_docking_box(tmp_path, monkeypatch):
         return 0, "Boltz complete", ""
 
     monkeypatch.setattr(boltz2_runner, "_run_boltz", fake_boltz)
-    method = Boltz2Prediction(parameters={
-        "accelerator": "cpu",
-        "diffusion_samples": 2,
-        "output_format": "pdb",
-        "emit_docking_inputs": True,
-        "docking_box_padding": 8.0,
-    })
+    method = Boltz2Prediction(
+        parameters={
+            "accelerator": "cpu",
+            "diffusion_samples": 2,
+            "output_format": "pdb",
+            "emit_docking_inputs": True,
+            "docking_box_padding": 8.0,
+        }
+    )
     task = Task(
         task_id="boltz2_docking_handoff",
         method=method,
         inputs={
-            "proteins": [Artifact(
-                "sequence.protein", "inline", "MKT", storage=ArtifactStorage.INLINE,
-                metadata={"chain_id": "A"},
-            )],
-            "ligands": [Artifact(
-                "molecule.collection", "smiles", ["CCO", "CCC"],
-                storage=ArtifactStorage.INLINE,
-                metadata={"chain_id": ["B", "C"]},
-            )],
+            "proteins": [
+                Artifact(
+                    "sequence.protein",
+                    "inline",
+                    "MKT",
+                    storage=ArtifactStorage.INLINE,
+                    metadata={"chain_id": "A"},
+                )
+            ],
+            "ligands": [
+                Artifact(
+                    "molecule.collection",
+                    "smiles",
+                    ["CCO", "CCC"],
+                    storage=ArtifactStorage.INLINE,
+                    metadata={"chain_id": ["B", "C"]},
+                )
+            ],
         },
     )
     task.work_dir = tmp_path / "work"

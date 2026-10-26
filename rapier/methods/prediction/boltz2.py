@@ -13,8 +13,18 @@ from ...core.method import Method, RunContext
 from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
 from ...core.task import Task
 from ...data import (
-    BindingSite, ComplexStructure, DnaSequence, File, Molecule, Molecules, ProteinSequence,
-    ProteinStructure, Report, RnaSequence, Scores, Structure,
+    BindingSite,
+    ComplexStructure,
+    DnaSequence,
+    File,
+    Molecule,
+    Molecules,
+    ProteinSequence,
+    ProteinStructure,
+    Report,
+    RnaSequence,
+    Scores,
+    Structure,
 )
 from ..utils import check_executable
 from ._validation import structure_errors
@@ -40,33 +50,58 @@ class Boltz2Prediction(Method):
     category = "prediction"
     version = "2.0"
     inputs = {
-        "proteins": PortSpec(ProteinSequence, ("inline", "fasta"), required=False, cardinality="many"),
-        "dna": PortSpec(DnaSequence, ("inline", "fasta"), required=False, cardinality="many"),
-        "rna": PortSpec(RnaSequence, ("inline", "fasta"), required=False, cardinality="many"),
-        "ligands": PortSpec(
-            (Molecule, Molecules), ("smiles", "sdf", "mol2", "ccd"), required=False, cardinality="many",
+        "proteins": PortSpec(
+            ProteinSequence, ("inline", "fasta"), required=False, cardinality="many"
         ),
-        "templates": PortSpec(Structure, ("pdb", "cif"), required=False, cardinality="many"),
-        "msas": PortSpec(File, ("a3m", "csv"), required=False, cardinality="many"),
+        "dna": PortSpec(
+            DnaSequence, ("inline", "fasta"), required=False, cardinality="many"
+        ),
+        "rna": PortSpec(
+            RnaSequence, ("inline", "fasta"), required=False, cardinality="many"
+        ),
+        "ligands": PortSpec(
+            (Molecule, Molecules),
+            ("smiles", "sdf", "mol2", "ccd"),
+            required=False,
+            cardinality="many",
+        ),
+        "templates": PortSpec(
+            Structure, ("pdb", "cif"), required=False, cardinality="many"
+        ),
+        "msa": PortSpec(File, ("a3m", "csv"), required=False, cardinality="many"),
         "constraints": PortSpec(File, "json", required=False),
     }
     outputs = {
-        "predicted_structures": PortSpec(ComplexStructure, ("cif", "pdb"), cardinality="many"),
+        "predicted_structures": PortSpec(
+            ComplexStructure, ("cif", "pdb"), cardinality="many"
+        ),
         "confidence_scores": PortSpec(Report, "json", cardinality="many"),
         "affinity_scores": PortSpec(Report, "json", required=False, cardinality="many"),
-        "scores": PortSpec(Scores, "csv", description="Per-model confidence_score and affinity values"),
+        "scores": PortSpec(
+            Scores, "csv", description="Per-model confidence_score and affinity values"
+        ),
         "prediction_arrays": PortSpec(File, "npz", required=False, cardinality="many"),
         "run_summary": PortSpec(Report, "json"),
         "vina_receptor": PortSpec(
-            ProteinStructure, "pdb", required=False,
-            description="Receptor-only structure extracted from the selected Boltz complex",
+            ProteinStructure,
+            "pdb",
+            required=False,
+            description=(
+                "Receptor-only structure extracted from the selected Boltz complex"
+            ),
         ),
         "docking_box": PortSpec(
-            BindingSite, "box", required=False,
-            description="Ligand-centered Vina search box extracted from Boltz coordinates",
+            BindingSite,
+            "box",
+            required=False,
+            description=(
+                "Ligand-centered Vina search box extracted from Boltz coordinates"
+            ),
         ),
     }
-    resources = ResourceSpec(cpus=8, memory="32GB", gpus=1, time="12:00:00", partition="gpu")
+    resources = ResourceSpec(
+        cpus=8, memory="32GB", gpus=1, time="12:00:00", partition="gpu"
+    )
     environment = EnvironmentSpec(executables=["boltz", "python"])
     config_fields = {
         "cache": ConfigField((str, type(None)), default=None),
@@ -93,7 +128,9 @@ class Boltz2Prediction(Method):
         "constraints": ConfigField((list, type(None)), default=None),
         "use_msa_server": ConfigField(bool, default=True),
         "msa_server_url": ConfigField(str, default="https://api.colabfold.com"),
-        "msa_pairing_strategy": ConfigField(str, default="greedy", choices=("greedy", "complete")),
+        "msa_pairing_strategy": ConfigField(
+            str, default="greedy", choices=("greedy", "complete")
+        ),
         "single_sequence_mode": ConfigField(bool, default=False),
         "use_potentials": ConfigField(bool, default=False),
         "override": ConfigField(bool, default=True),
@@ -117,6 +154,27 @@ class Boltz2Prediction(Method):
         """Entity content and optional software are checked on the execution host."""
         return []
 
+    def format_inputs(
+        self, raw: Dict[str, Any], input_dir: Optional[Path] = None
+    ) -> Dict[str, Any]:
+        """Drop lower-priority templates before generic artifact validation.
+
+        A supplied unified MSA disables Boltz template handling. Removing the
+        stale binding before staging also allows callers to provide a missing
+        template path without failing input validation.
+        """
+        values = dict(raw)
+        if values.get("msa"):
+            values.pop("templates", None)
+        return super().format_inputs(values, input_dir)
+
+    def validate_inputs(self, inputs: Dict[str, Any]):
+        """Apply MSA precedence during direct validation as well as execution."""
+        values = dict(inputs)
+        if values.get("msa"):
+            values.pop("templates", None)
+        return super().validate_inputs(values)
+
     def check_dependencies(self, inputs: Dict[str, Any], ctx: RunContext) -> List[str]:
         """Check entity, ligand, MSA, and conditional handoff prerequisites."""
         errors: List[str] = []
@@ -134,16 +192,30 @@ class Boltz2Prediction(Method):
                 except ImportError:
                     errors.append("Boltz SDF ligand inputs require the RDKit package")
                     break
-                if artifact.is_file and (not artifact.path.exists() or artifact.path.stat().st_size == 0):
-                    errors.append(f"Boltz ligand input is missing or empty: {artifact.path}")
+                if artifact.is_file and (
+                    not artifact.path.exists() or artifact.path.stat().st_size == 0
+                ):
+                    errors.append(
+                        f"Boltz ligand input is missing or empty: {artifact.path}"
+                    )
                 else:
                     try:
                         records = artifact.records()
                         for record in records:
-                            if Chem.MolFromMolBlock(record.block, sanitize=True, removeHs=False) is None:
-                                errors.append(f"Boltz SDF ligand record {record.index} ('{record.id}') is invalid")
+                            if (
+                                Chem.MolFromMolBlock(
+                                    record.block, sanitize=True, removeHs=False
+                                )
+                                is None
+                            ):
+                                errors.append(
+                                    f"Boltz SDF ligand record {record.index} "
+                                    f"('{record.id}') is invalid"
+                                )
                         if not records:
-                            errors.append("Boltz SDF ligand input has no molecule records")
+                            errors.append(
+                                "Boltz SDF ligand input has no molecule records"
+                            )
                     except Exception as exc:
                         errors.append(f"Could not read Boltz SDF ligand records: {exc}")
         if self.config.get("affinity_binder") and not ligands:
@@ -152,7 +224,9 @@ class Boltz2Prediction(Method):
         # constraints, ligand representations and usable entity content. It is
         # intentionally performed on the execution host before invoking Boltz.
         try:
-            document = build_input_yaml(inputs, dict(self.config), ctx.work_dir / "boltz2_dependency_input.yaml")
+            document = build_input_yaml(
+                inputs, dict(self.config), ctx.work_dir / "boltz2_dependency_input.yaml"
+            )
             ligand_ids = {
                 str(payload.get("id"))
                 for item in document.get("sequences", [])
@@ -165,9 +239,14 @@ class Boltz2Prediction(Method):
                 affinity = item["affinity"]
                 binder = affinity.get("binder") if isinstance(affinity, dict) else None
                 if not isinstance(binder, str) or not binder:
-                    errors.append(f"Affinity property {property_index} requires a ligand binder chain ID")
+                    errors.append(
+                        f"Affinity property {property_index} requires a ligand "
+                        "binder chain ID"
+                    )
                 elif binder not in ligand_ids:
-                    errors.append(f"Affinity binder '{binder}' does not match a ligand chain ID")
+                    errors.append(
+                        f"Affinity binder '{binder}' does not match a ligand chain ID"
+                    )
         except Exception as exc:
             errors.append(f"Boltz input prerequisites: {exc}")
         if self.config.get("emit_docking_inputs"):
@@ -179,7 +258,8 @@ class Boltz2Prediction(Method):
 
     def _affinity_requested(self) -> bool:
         return bool(self.config.get("affinity_binder")) or any(
-            isinstance(item, dict) and "affinity" in item for item in self.config.get("properties") or []
+            isinstance(item, dict) and "affinity" in item
+            for item in self.config.get("properties") or []
         )
 
     @staticmethod
@@ -230,13 +310,18 @@ class Boltz2Prediction(Method):
         return False
 
     def validate_outputs(
-        self, inputs: Dict[str, Any], outputs: Dict[str, Any], ctx: RunContext,
+        self,
+        inputs: Dict[str, Any],
+        outputs: Dict[str, Any],
+        ctx: RunContext,
     ) -> List[str]:
         """Validate the complete Boltz structure/report/score pool."""
         errors: List[str] = []
         structures_value = outputs.get("predicted_structures")
-        structures = structures_value if isinstance(structures_value, list) else (
-            [structures_value] if structures_value is not None else []
+        structures = (
+            structures_value
+            if isinstance(structures_value, list)
+            else ([structures_value] if structures_value is not None else [])
         )
         if not structures:
             errors.append("Boltz produced no predicted structures")
@@ -249,55 +334,97 @@ class Boltz2Prediction(Method):
                 errors.append(f"Predicted structure {index} is not file-backed")
                 continue
             if not structure.path.exists() or structure.path.stat().st_size == 0:
-                errors.append(f"Predicted structure file is missing or empty: {structure.path}")
-            expected_format = "cif" if self.config.get("output_format") == "mmcif" else self.config.get("output_format")
-            if structure.format not in (expected_format, "mmcif" if expected_format == "cif" else expected_format):
                 errors.append(
-                    f"Predicted structure {structure.path} has format '{structure.format}', "
+                    f"Predicted structure file is missing or empty: {structure.path}"
+                )
+            expected_format = (
+                "cif"
+                if self.config.get("output_format") == "mmcif"
+                else self.config.get("output_format")
+            )
+            if structure.format not in (
+                expected_format,
+                "mmcif" if expected_format == "cif" else expected_format,
+            ):
+                errors.append(
+                    f"Predicted structure {structure.path} has format "
+                    f"'{structure.format}', "
                     f"expected '{expected_format}'"
                 )
             structure_stems.append(structure.path.stem)
-            errors.extend(structure_errors(structure.path, structure.format, "Boltz predicted structure"))
+            errors.extend(
+                structure_errors(
+                    structure.path, structure.format, "Boltz predicted structure"
+                )
+            )
         if len(structure_stems) != len(set(structure_stems)):
             errors.append("Boltz predicted structure stems are duplicated")
         expected_samples = int(self.config.get("diffusion_samples", 1))
         if len(structures) != expected_samples:
             errors.append(
-                f"Boltz produced {len(structures)} predicted structures; expected {expected_samples} "
+                f"Boltz produced {len(structures)} predicted structures; expected "
+                f"{expected_samples} "
                 "from diffusion_samples"
             )
 
-        summary = self._load_report(outputs.get("run_summary"), errors, "Boltz run_summary")
+        summary = self._load_report(
+            outputs.get("run_summary"), errors, "Boltz run_summary"
+        )
         if not isinstance(summary, dict):
             summary = {}
         if summary.get("status") != "completed":
-            errors.append(f"Boltz run summary status is not completed: {summary.get('status')!r}")
+            errors.append(
+                f"Boltz run summary status is not completed: {summary.get('status')!r}"
+            )
         summary_structures = summary.get("structures")
-        if isinstance(summary_structures, list) and sorted(str(value) for value in summary_structures) != sorted(str(value.path) for value in structures if isinstance(value, Artifact) and value.is_file):
-            errors.append("Boltz run summary structure inventory does not match collected structures")
+        if isinstance(summary_structures, list) and sorted(
+            str(value) for value in summary_structures
+        ) != sorted(
+            str(value.path)
+            for value in structures
+            if isinstance(value, Artifact) and value.is_file
+        ):
+            errors.append(
+                "Boltz run summary structure inventory does not match "
+                "collected structures"
+            )
         elif not isinstance(summary_structures, list):
             errors.append("Boltz run summary is missing its structures inventory")
 
         confidence_value = outputs.get("confidence_scores")
-        confidence = confidence_value if isinstance(confidence_value, list) else (
-            [confidence_value] if confidence_value is not None else []
+        confidence = (
+            confidence_value
+            if isinstance(confidence_value, list)
+            else ([confidence_value] if confidence_value is not None else [])
         )
         confidence_paths: List[Path] = []
         for index, report in enumerate(confidence):
-            payload = self._load_report(report, errors, f"Boltz confidence report {index}")
+            payload = self._load_report(
+                report, errors, f"Boltz confidence report {index}"
+            )
             if isinstance(report, Artifact) and report.is_file:
                 confidence_paths.append(report.path)
             if payload is not None and not self._report_values(payload):
-                errors.append(f"Boltz confidence report {index} has no finite numeric values")
+                errors.append(
+                    f"Boltz confidence report {index} has no finite numeric values"
+                )
             if self._has_nonfinite(payload):
-                errors.append(f"Boltz confidence report {index} contains non-finite values")
+                errors.append(
+                    f"Boltz confidence report {index} contains non-finite values"
+                )
         if len(confidence_paths) > 1:
             for report in confidence_paths:
                 stem = report.stem.lower()
                 if stem.startswith("confidence_"):
-                    stem = stem[len("confidence_"):]
-                if not any(stem in model.lower() or model.lower() in stem for model in structure_stems):
-                    errors.append(f"Unexpected confidence report '{report.name}' does not match a predicted model")
+                    stem = stem[len("confidence_") :]
+                if not any(
+                    stem in model.lower() or model.lower() in stem
+                    for model in structure_stems
+                ):
+                    errors.append(
+                        f"Unexpected confidence report '{report.name}' does not "
+                        "match a predicted model"
+                    )
         if structure_stems:
             for stem in structure_stems:
                 matched = any(
@@ -306,11 +433,29 @@ class Boltz2Prediction(Method):
                     for report in confidence_paths
                 )
                 if not matched and len(confidence_paths) != 1:
-                    errors.append(f"No confidence report matches predicted structure '{stem}'")
+                    errors.append(
+                        f"No confidence report matches predicted structure '{stem}'"
+                    )
                 elif confidence_paths:
-                    structure_path = next((item.path for item in structures if isinstance(item, Artifact) and item.is_file and item.path.stem == stem), None)
-                    if structure_path is not None and _matching_confidence(structure_path, confidence_paths) is None:
-                        errors.append(f"Confidence report for structure '{stem}' has no usable score")
+                    structure_path = next(
+                        (
+                            item.path
+                            for item in structures
+                            if isinstance(item, Artifact)
+                            and item.is_file
+                            and item.path.stem == stem
+                        ),
+                        None,
+                    )
+                    if (
+                        structure_path is not None
+                        and _matching_confidence(structure_path, confidence_paths)
+                        is None
+                    ):
+                        errors.append(
+                            f"Confidence report for structure '{stem}' has no "
+                            "usable score"
+                        )
         if len(confidence_paths) != len(set(confidence_paths)):
             errors.append("Boltz confidence report inventory contains duplicates")
 
@@ -321,13 +466,16 @@ class Boltz2Prediction(Method):
         else:
             try:
                 score_rows, row_errors = scores_value.rows_with_errors()
-                errors.extend(f"Could not read Boltz scores: {error}" for error in row_errors)
+                errors.extend(
+                    f"Could not read Boltz scores: {error}" for error in row_errors
+                )
             except Exception as exc:
                 errors.append(f"Could not read Boltz scores: {exc}")
                 score_rows = []
         if len(score_rows) != len(structure_stems):
             errors.append(
-                f"Boltz score row count {len(score_rows)} does not match structure count {len(structure_stems)}"
+                f"Boltz score row count {len(score_rows)} does not match structure "
+                f"count {len(structure_stems)}"
             )
         seen_ids: set[str] = set()
         for index, row in enumerate(score_rows):
@@ -336,46 +484,85 @@ class Boltz2Prediction(Method):
                 errors.append(f"Boltz score row {index} duplicates model ID '{row_id}'")
             seen_ids.add(row_id)
             if row_id not in structure_stems:
-                errors.append(f"Boltz score row {index} references unknown model '{row_id}'")
-            for column in ("confidence_score", "affinity_pred_value", "affinity_probability_binary"):
+                errors.append(
+                    f"Boltz score row {index} references unknown model '{row_id}'"
+                )
+            for column in (
+                "confidence_score",
+                "affinity_pred_value",
+                "affinity_probability_binary",
+            ):
                 if column in row or column == "confidence_score":
                     try:
-                        number = float(row.get(column)) if not isinstance(row.get(column), bool) else math.nan
+                        number = (
+                            float(row.get(column))
+                            if not isinstance(row.get(column), bool)
+                            else math.nan
+                        )
                     except (TypeError, ValueError):
                         number = math.nan
                     if not math.isfinite(number):
                         errors.append(f"Boltz score row {index} has invalid {column}")
                     elif column == "confidence_score" and row_id in structure_stems:
                         expected_confidence = _matching_confidence(
-                            next(item.path for item in structures if isinstance(item, Artifact) and item.is_file and item.path.stem == row_id),
+                            next(
+                                item.path
+                                for item in structures
+                                if isinstance(item, Artifact)
+                                and item.is_file
+                                and item.path.stem == row_id
+                            ),
                             confidence_paths,
                         )
-                        if expected_confidence is not None and not math.isclose(number, expected_confidence, rel_tol=1e-9, abs_tol=1e-9):
-                            errors.append(f"Boltz score row {index} confidence_score disagrees with its confidence report")
+                        if expected_confidence is not None and not math.isclose(
+                            number, expected_confidence, rel_tol=1e-9, abs_tol=1e-9
+                        ):
+                            errors.append(
+                                f"Boltz score row {index} confidence_score disagrees "
+                                "with its confidence report"
+                            )
         missing_ids = sorted(set(structure_stems) - seen_ids)
         if missing_ids:
             errors.append(f"Boltz scores are missing model IDs: {missing_ids}")
 
         affinity = outputs.get("affinity_scores")
         if self._affinity_requested():
-            affinity_items = affinity if isinstance(affinity, list) else ([affinity] if affinity is not None else [])
+            affinity_items = (
+                affinity
+                if isinstance(affinity, list)
+                else ([affinity] if affinity is not None else [])
+            )
             if not affinity_items:
-                errors.append("Affinity prediction was requested but no affinity report was produced")
+                errors.append(
+                    "Affinity prediction was requested but no affinity report "
+                    "was produced"
+                )
             for index, report in enumerate(affinity_items):
-                payload = self._load_report(report, errors, f"Boltz affinity report {index}")
+                payload = self._load_report(
+                    report, errors, f"Boltz affinity report {index}"
+                )
                 if isinstance(payload, dict) and not any(
                     key.startswith("affinity") and self._report_values(value)
                     for key, value in payload.items()
                 ):
-                    errors.append(f"Boltz affinity report {index} has no affinity values")
+                    errors.append(
+                        f"Boltz affinity report {index} has no affinity values"
+                    )
                 if self._has_nonfinite(payload):
-                    errors.append(f"Boltz affinity report {index} contains non-finite values")
+                    errors.append(
+                        f"Boltz affinity report {index} contains non-finite values"
+                    )
         elif affinity is not None:
             affinity_items = affinity if isinstance(affinity, list) else [affinity]
             for index, report in enumerate(affinity_items):
-                payload = self._load_report(report, errors, f"Boltz optional affinity report {index}")
+                payload = self._load_report(
+                    report, errors, f"Boltz optional affinity report {index}"
+                )
                 if self._has_nonfinite(payload):
-                    errors.append(f"Boltz optional affinity report {index} contains non-finite values")
+                    errors.append(
+                        f"Boltz optional affinity report {index} contains "
+                        "non-finite values"
+                    )
 
         arrays = outputs.get("prediction_arrays") or []
         arrays = arrays if isinstance(arrays, list) else [arrays]
@@ -385,17 +572,31 @@ class Boltz2Prediction(Method):
             else:
                 try:
                     with zipfile.ZipFile(array.path) as handle:
-                        if not handle.namelist() or any(not name.endswith(".npy") for name in handle.namelist()):
-                            errors.append(f"Boltz prediction array {index} is not a usable NPZ archive")
+                        if not handle.namelist() or any(
+                            not name.endswith(".npy") for name in handle.namelist()
+                        ):
+                            errors.append(
+                                f"Boltz prediction array {index} is not a usable "
+                                "NPZ archive"
+                            )
                         for name in handle.namelist():
                             with handle.open(name) as entry:
                                 if entry.read(6) != b"\x93NUMPY":
-                                    errors.append(f"Boltz prediction array {index} entry '{name}' has no NumPy header")
+                                    errors.append(
+                                        f"Boltz prediction array {index} entry "
+                                        f"'{name}' "
+                                        "has no NumPy header"
+                                    )
                         corrupt = handle.testzip()
                         if corrupt:
-                            errors.append(f"Boltz prediction array {index} contains corrupt entry '{corrupt}'")
+                            errors.append(
+                                f"Boltz prediction array {index} contains corrupt "
+                                f"entry '{corrupt}'"
+                            )
                 except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
-                    errors.append(f"Could not read Boltz prediction array {index}: {exc}")
+                    errors.append(
+                        f"Could not read Boltz prediction array {index}: {exc}"
+                    )
 
         if self.config.get("emit_docking_inputs"):
             receptor = outputs.get("vina_receptor")
@@ -404,7 +605,11 @@ class Boltz2Prediction(Method):
             elif not receptor.path.exists() or receptor.path.stat().st_size == 0:
                 errors.append("Boltz docking receptor is missing or empty")
             else:
-                errors.extend(structure_errors(receptor.path, receptor.format, "Boltz docking receptor"))
+                errors.extend(
+                    structure_errors(
+                        receptor.path, receptor.format, "Boltz docking receptor"
+                    )
+                )
             box = outputs.get("docking_box")
             if not isinstance(box, Artifact) or not isinstance(box.value, dict):
                 errors.append("Boltz docking handoff is missing docking_box")
@@ -412,7 +617,9 @@ class Boltz2Prediction(Method):
                 size = box.value.get("size")
                 center = box.value.get("center")
                 if not self._valid_vector(size, positive=True):
-                    errors.append("Boltz docking_box size must contain three positive values")
+                    errors.append(
+                        "Boltz docking_box size must contain three positive values"
+                    )
                 if not self._valid_vector(center):
                     errors.append("Boltz docking_box center must contain three values")
         return errors
@@ -427,12 +634,16 @@ class Boltz2Prediction(Method):
             numbers = [float(item) for item in value]
         except (TypeError, ValueError):
             return False
-        return all(math.isfinite(item) and (not positive or item > 0) for item in numbers)
+        return all(
+            math.isfinite(item) and (not positive or item > 0) for item in numbers
+        )
 
     def validate_environment(self) -> Tuple[bool, List[str]]:
         errors: List[str] = []
         if not check_executable("boltz"):
-            errors.append("Boltz CLI (boltz) not found in PATH; install boltz[cuda] or boltz")
+            errors.append(
+                "Boltz CLI (boltz) not found in PATH; install boltz[cuda] or boltz"
+            )
         if not check_executable("python"):
             errors.append("Python not found in PATH")
         if self.config.get("emit_docking_inputs"):
@@ -440,7 +651,8 @@ class Boltz2Prediction(Method):
                 import gemmi  # noqa: F401
             except ImportError:
                 errors.append(
-                    "Gemmi is required when emit_docking_inputs is enabled; install gemmi"
+                    "Gemmi is required when emit_docking_inputs is enabled; install "
+                    "gemmi"
                 )
         return not errors, errors
 
@@ -468,6 +680,7 @@ class Boltz2Prediction(Method):
             "output_dir": str(output_dir),
             "sample_name": input_yaml.stem,
             "config": config,
+            "msa_supplied": bool(task.inputs.get("msa")),
             "entity_mapping": entity_mapping,
         }
         manifest_path = work_dir / "boltz2_manifest.json"
@@ -491,7 +704,9 @@ class Boltz2Prediction(Method):
     def collect_outputs(self, task: Task) -> Dict[str, Any]:
         return super().collect_outputs(task)
 
-    def _collect(self, work_dir: Path, output_errors: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _collect(
+        self, work_dir: Path, output_errors: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """Gather independent outputs before allowing the pooled validator to decide."""
         summary_path = Path(work_dir) / "outputs" / "boltz2_run.json"
         output_errors = output_errors if output_errors is not None else []
@@ -512,48 +727,68 @@ class Boltz2Prediction(Method):
                 values = []
             for index, value in enumerate(values):
                 if not isinstance(value, (str, Path)):
-                    output_errors.append(f"Boltz run summary '{key}' item {index} is not a path")
+                    output_errors.append(
+                        f"Boltz run summary '{key}' item {index} is not a path"
+                    )
                 else:
                     paths.append(Path(value))
             # Retain independently discoverable files even when the summary
             # is malformed or omits one sibling result.
             prediction_root = Path(work_dir) / "boltz2_output"
-            discovered = sorted({path for pattern in patterns for path in prediction_root.glob(pattern)})
+            discovered = sorted(
+                {path for pattern in patterns for path in prediction_root.glob(pattern)}
+            )
             for path in discovered:
                 if path not in paths:
                     paths.append(path)
             return paths
 
-        structures = paths_for("structures", ("**/*_model_*.cif", "**/*_model_*.mmcif", "**/*_model_*.pdb"))
+        structures = paths_for(
+            "structures", ("**/*_model_*.cif", "**/*_model_*.mmcif", "**/*_model_*.pdb")
+        )
         confidence = paths_for("confidence", ("**/confidence_*.json",))
         affinity = paths_for("affinity", ("**/affinity_*.json",))
         arrays = paths_for("arrays", ("**/*.npz",))
         meta = {"prediction_dir": summary.get("prediction_dir"), "model": "boltz2"}
         outputs: Dict[str, Any] = {
             "predicted_structures": [
-                ComplexStructure.from_file(path, "pdb" if path.suffix == ".pdb" else "cif", meta)
+                ComplexStructure.from_file(
+                    path, "pdb" if path.suffix == ".pdb" else "cif", meta
+                )
                 for path in structures
             ],
-            "confidence_scores": [Report.from_file(path, "json", meta) for path in confidence],
+            "confidence_scores": [
+                Report.from_file(path, "json", meta) for path in confidence
+            ],
             "run_summary": Report.from_file(summary_path, "json", meta),
         }
         try:
             outputs["scores"] = Scores.from_records(
                 self._score_rows(structures, confidence, affinity, output_errors),
                 Path(work_dir) / "outputs" / "boltz2_scores.csv",
-                directions=BOLTZ_SCORE_DIRECTIONS, metadata=meta,
+                directions=BOLTZ_SCORE_DIRECTIONS,
+                metadata=meta,
             )
         except Exception as exc:
             output_errors.append(f"Could not create Boltz score table: {exc}")
         if affinity:
-            outputs["affinity_scores"] = [Report.from_file(path, "json", meta) for path in affinity]
+            outputs["affinity_scores"] = [
+                Report.from_file(path, "json", meta) for path in affinity
+            ]
         if arrays:
-            outputs["prediction_arrays"] = [File.from_file(path, "npz", meta) for path in arrays]
+            outputs["prediction_arrays"] = [
+                File.from_file(path, "npz", meta) for path in arrays
+            ]
         if self.config.get("emit_docking_inputs"):
-            receptor_path = summary.get("docking_receptor") or Path(work_dir) / "outputs" / "vina_receptor.pdb"
+            receptor_path = (
+                summary.get("docking_receptor")
+                or Path(work_dir) / "outputs" / "vina_receptor.pdb"
+            )
             docking_box = summary.get("docking_box")
             try:
-                outputs["vina_receptor"] = ProteinStructure.from_file(Path(receptor_path), "pdb", meta)
+                outputs["vina_receptor"] = ProteinStructure.from_file(
+                    Path(receptor_path), "pdb", meta
+                )
             except Exception as exc:
                 output_errors.append(f"Could not collect Boltz docking receptor: {exc}")
             if docking_box is not None:
@@ -562,7 +797,9 @@ class Boltz2Prediction(Method):
 
     @staticmethod
     def _score_rows(
-        structures: List[Path], confidence: List[Path], affinity: List[Path],
+        structures: List[Path],
+        confidence: List[Path],
+        affinity: List[Path],
         output_errors: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """One row per model: its confidence score plus the sample's affinity values."""
@@ -575,13 +812,23 @@ class Boltz2Prediction(Method):
                     raise ValueError("expected a JSON object")
                 if index == 0:
                     affinity_values = {
-                        key: value for key, value in payload.items()
-                        if key.startswith("affinity") and isinstance(value, (int, float)) and not isinstance(value, bool)
+                        key: value
+                        for key, value in payload.items()
+                        if key.startswith("affinity")
+                        and isinstance(value, (int, float))
+                        and not isinstance(value, bool)
                     }
             except Exception as exc:
-                output_errors.append(f"Could not derive Boltz scores from affinity report {report}: {exc}")
+                output_errors.append(
+                    f"Could not derive Boltz scores from affinity report {report}: "
+                    f"{exc}"
+                )
         return [
-            {"id": path.stem, "confidence_score": _matching_confidence(path, confidence), **affinity_values}
+            {
+                "id": path.stem,
+                "confidence_score": _matching_confidence(path, confidence),
+                **affinity_values,
+            }
             for path in structures
         ]
 

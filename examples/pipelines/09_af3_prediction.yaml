@@ -3,7 +3,7 @@ description: Screen two ligands independently with the installed AlphaFold 3
 version: 1.0.0
 
 inputs:
-  protein:
+  proteins:
     type: sequence.protein
     format: inline
     value: MKTAYIAKQRQISFVKSHFSRQ
@@ -16,7 +16,7 @@ methods:
   - id: predict
     type: af3
     inputs:
-      protein: pipeline.protein
+      proteins: pipeline.proteins
       ligands: pipeline.ligands
     config:
       conda_env: af3_test

@@ -2,7 +2,15 @@
 
 from .catalog import build_catalog
 from .demo_methods import DEMO_METHODS, demo_pipeline, register_demo_methods
-from .graph import GraphError, graph_to_pipeline_dict, graph_to_yaml, pipeline_dict_to_graph, validate_graph, yaml_to_graph
+from .graph import (
+    GraphError,
+    graph_to_pipeline_dict,
+    graph_to_yaml,
+    pipeline_dict_to_graph,
+    validate_graph,
+    yaml_to_graph,
+)
+from .graph import graph_to_workflow_files
 
 __all__ = [
     "build_catalog",
@@ -12,6 +20,7 @@ __all__ = [
     "GraphError",
     "graph_to_pipeline_dict",
     "graph_to_yaml",
+    "graph_to_workflow_files",
     "pipeline_dict_to_graph",
     "validate_graph",
     "yaml_to_graph",

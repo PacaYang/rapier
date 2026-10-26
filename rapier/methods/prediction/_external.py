@@ -353,6 +353,13 @@ class ExternalPrediction(Method):
     def _validate_additional_outputs(self, outputs, collected):
         return []
 
+    def _protein_input(self, inputs):
+        return (
+            protein_sequence(inputs["protein"], self.max_protein_length)
+            if inputs.get("protein")
+            else None
+        )
+
     def run(self, inputs: Dict[str, Any], ctx: RunContext) -> Dict[str, Any]:
         # Commands change their working directory; all generated paths must
         # therefore be absolute, including for local tasks with relative paths.
@@ -360,11 +367,7 @@ class ExternalPrediction(Method):
         cases, errors = self._inventory(inputs)
         if errors:
             raise MethodError("; ".join(errors))
-        protein = (
-            protein_sequence(inputs["protein"], self.max_protein_length)
-            if inputs.get("protein")
-            else None
-        )
+        protein = self._protein_input(inputs)
         attempt = ctx.output_dir / ("attempt_" + uuid.uuid4().hex)
         attempt.mkdir()
         cases = self._prepare_cases(cases, attempt)
@@ -477,11 +480,7 @@ class ExternalPrediction(Method):
                 errors.append(
                     f"{failed} ligand/job(s) failed with allow_partial_failures=False"
                 )
-            protein = (
-                protein_sequence(inputs["protein"], self.max_protein_length)
-                if inputs.get("protein")
-                else None
-            )
+            protein = self._protein_input(inputs)
             for case in cases:
                 if case.get("status") == "failed":
                     if not case.get("error"):

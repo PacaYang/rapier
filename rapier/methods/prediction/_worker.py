@@ -83,13 +83,40 @@ def prepare_ligands(request):
     return {"cases": cases}
 
 
+def af3_options(document, request):
+    """Remove replaced paths before AF3 resolves remaining native references."""
+    msas = request.get("msa") or {}
+    entities = []
+    for entity in document["sequences"]:
+        protein = entity.get("protein")
+        if protein is None:
+            entities.append(entity)
+            continue
+        if msas or not request.get("use_templates", True):
+            protein["templates"] = []
+        if not msas:
+            entities.append(entity)
+            continue
+        chains = protein["id"] if isinstance(protein["id"], list) else [protein["id"]]
+        for chain in chains:
+            value = dict(
+                protein, id=chain, unpairedMsa=msas[chain], pairedMsa="", templates=[]
+            )
+            value.pop("unpairedMsaPath", None)
+            value.pop("pairedMsaPath", None)
+            entities.append({"protein": value})
+    document["sequences"] = entities
+    return document
+
+
 def prepare_af3(request):
     from alphafold3.common import folding_input
 
     source = Path(request["source"]) if request.get("source") else None
-    payload = source.read_text() if source else json.dumps(request["document"])
-    job = folding_input.Input.from_json(payload, json_path=source)
-    document = json.loads(job.to_json())
+    document = json.loads(source.read_text()) if source else request["document"]
+    document = af3_options(document, request)
+    job = folding_input.Input.from_json(json.dumps(document), json_path=source)
+    document = af3_options(json.loads(job.to_json()), request)
     if not request["run_data_pipeline"]:
         for entity in document["sequences"]:
             protein = entity.get("protein")

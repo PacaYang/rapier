@@ -10,13 +10,14 @@
   <header class="toolbar" role="toolbar" aria-label="Pipeline actions">
     <h1>Rapier <span>workflow builder</span></h1>
     <input id="pipeline-name" aria-label="Pipeline name" spellcheck="false">
+    <button id="btn-settings" type="button">Workflow settings</button>
     <div class="spacer"></div>
     <button id="btn-new" type="button">New</button>
     <label class="select-wrap">Example
       <select id="sel-example" aria-label="Load example pipeline"><option value="">Load…</option></select>
     </label>
     <button id="btn-import" type="button">Import YAML</button>
-    <input id="file-import" type="file" accept=".yaml,.yml" hidden>
+    <input id="file-import" type="file" accept=".yaml,.yml" multiple hidden>
     <button id="btn-layout" type="button">Auto-layout</button>
     <button id="btn-fit" type="button">Fit view</button>
     <button id="btn-validate" type="button">Validate</button>
@@ -48,13 +49,27 @@
   </footer>
 
   <dialog id="export-dialog" aria-labelledby="export-title">
-    <h2 id="export-title">Pipeline YAML</h2>
-    <textarea id="export-text" readonly spellcheck="false" aria-label="Exported pipeline YAML"></textarea>
-    <div class="dialog-actions">
-      <button id="btn-copy" type="button">Copy</button>
-      <button id="btn-download" type="button" class="primary">Download</button>
-      <button id="btn-close-export" type="button">Close</button>
+    <h2 id="export-title">Export workflow</h2>
+    <p class="hint">Save both files in the same directory. To import them again, select both files together.</p>
+    <div class="export-files">
+      <section aria-label="Workflow file">
+        <h3>Workflow · <span id="export-workflow-name"></span></h3>
+        <textarea id="export-text" readonly spellcheck="false" aria-label="Exported workflow YAML"></textarea>
+        <div class="dialog-actions">
+          <button id="btn-copy" type="button">Copy workflow</button>
+          <button id="btn-download" type="button" class="primary">Download workflow</button>
+        </div>
+      </section>
+      <section aria-label="Metadata file">
+        <h3>Metadata · <span id="export-metadata-name"></span></h3>
+        <textarea id="export-metadata-text" readonly spellcheck="false" aria-label="Exported metadata YAML"></textarea>
+        <div class="dialog-actions">
+          <button id="btn-copy-metadata" type="button">Copy metadata</button>
+          <button id="btn-download-metadata" type="button" class="primary">Download metadata</button>
+        </div>
+      </section>
     </div>
+    <div class="dialog-actions"><button id="btn-close-export" type="button">Close</button></div>
   </dialog>
 
   <script type="module" src="/static/js/main.js"></script>

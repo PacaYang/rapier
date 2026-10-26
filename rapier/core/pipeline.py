@@ -2,9 +2,13 @@
 Pipeline class for workflow representation.
 """
 
-from typing import Dict, List, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Any, Tuple
 from rapier.core.task import Task
 from rapier.core.exceptions import ConfigurationError
+
+if TYPE_CHECKING:
+    from rapier.config import PipelineConfig
+    from rapier.core.execution_graph import ExecutionGraph
 
 
 class Pipeline:
@@ -26,10 +30,16 @@ class Pipeline:
         """
         self.name = name
         self.description = description
+        from rapier.config.workflow_metadata import WorkflowMetadata
+
+        self.workflow_metadata = WorkflowMetadata()
         self.tasks: Dict[str, Task] = {}
         self.connections: List[Tuple[str, str]] = []
         self.pooling_rules: Dict[str, str] = {}
-        self.metadata: Dict[str, Any] = {}
+        self.metadata: Dict[str, Any] = {
+            "workflow": self.workflow_metadata.to_dict(),
+            "output_directory": self.workflow_metadata.output_directory_placeholder(),
+        }
         self.artifacts: Dict[str, Any] = {}
         self.output_bindings: Dict[str, str] = {}
 
@@ -46,6 +56,10 @@ class Pipeline:
         if task.task_id in self.tasks:
             raise ConfigurationError(f"Task with id '{task.task_id}' already exists")
         task.pipeline = self
+        task.metadata["output_directory"] = {
+            **self.workflow_metadata.output_directory_placeholder(),
+            "task_id": task.task_id,
+        }
         self.tasks[task.task_id] = task
 
     def add_connection(self, from_task_id: str, to_task_id: str) -> None:
@@ -170,7 +184,7 @@ class Pipeline:
 
         return len(errors) == 0, errors
 
-    def to_execution_graph(self) -> 'ExecutionGraph':
+    def to_execution_graph(self) -> "ExecutionGraph":
         """
         Convert pipeline to execution graph.
 
@@ -178,10 +192,11 @@ class Pipeline:
             ExecutionGraph instance
         """
         from rapier.core.execution_graph import ExecutionGraph
+
         return ExecutionGraph.from_pipeline(self)
 
     @classmethod
-    def from_config(cls, config: 'PipelineConfig') -> 'Pipeline':
+    def from_config(cls, config: "PipelineConfig") -> "Pipeline":
         """
         Create pipeline from configuration.
 
@@ -194,7 +209,6 @@ class Pipeline:
         Raises:
             ConfigurationError: If configuration is invalid
         """
-        from rapier.config import PipelineConfig
         from rapier.config.validator import ConfigValidator
         from rapier.methods import get_registry
 
@@ -206,15 +220,18 @@ class Pipeline:
             raise ConfigurationError(error_msg)
 
         # Create pipeline
-        pipeline = cls(
-            name=config.name,
-            description=config.description or ""
-        )
+        pipeline = cls(name=config.name, description=config.description or "")
 
         # Store metadata from config
-        pipeline.metadata['version'] = config.version
-        pipeline.metadata['failure_policy'] = config.failure_policy
-        pipeline.metadata['environment'] = config.environment
+        pipeline.workflow_metadata = config.metadata
+        pipeline.metadata["workflow"] = config.metadata.to_dict()
+        pipeline.metadata["metadata_file"] = config.metadata_file
+        pipeline.metadata["output_directory"] = (
+            config.metadata.output_directory_placeholder()
+        )
+        pipeline.metadata["version"] = config.version
+        pipeline.metadata["failure_policy"] = config.failure_policy
+        pipeline.metadata["environment"] = config.environment
         pipeline.artifacts = {
             name: artifact_config.to_artifact()
             for name, artifact_config in config.inputs.items()
@@ -229,34 +246,39 @@ class Pipeline:
             method = None
             if registry.has(method_config.type):
                 method_class = registry.get(method_config.type)
-                method = method_class(name=method_config.id, config=method_config.config)
+                method = method_class(
+                    name=method_config.id, config=method_config.config
+                )
 
             task = Task(
                 task_id=method_config.id,
                 method=method,
                 inputs={},
                 metadata={
-                    'method_type': method_config.type,
-                    'description': method_config.description,
-                    'config': method_config.config,
-                    'parameters': method_config.config,
-                    'input_bindings': dict(method_config.inputs),
-                    'resources': method_config.resources or {},
-                    'failure_policy': method_config.failure_policy,
-                }
+                    "method_type": method_config.type,
+                    "description": method_config.description,
+                    "config": method_config.config,
+                    "parameters": method_config.config,
+                    "input_bindings": dict(method_config.inputs),
+                    "resource_controller": method_config.resource_controller,
+                    "failure_policy": method_config.failure_policy,
+                },
             )
 
             # Set retry configuration
-            if method_config.failure_policy == 'retry':
+            if method_config.failure_policy == "retry":
                 task.max_retries = method_config.retry_count
                 # Convert string policy to enum
                 from rapier.core.enums import FailurePolicy
+
                 task.failure_policy = FailurePolicy.RETRY
-            elif method_config.failure_policy == 'continue':
+            elif method_config.failure_policy == "continue":
                 from rapier.core.enums import FailurePolicy
+
                 task.failure_policy = FailurePolicy.CONTINUE
             else:
                 from rapier.core.enums import FailurePolicy
+
                 task.failure_policy = FailurePolicy.STOP
 
             pipeline.add_task(task)
@@ -270,20 +292,20 @@ class Pipeline:
         # Data references are also execution dependencies.
         for method_config in config.methods:
             for reference in method_config.inputs.values():
-                if reference.startswith('pipeline.'):
+                if reference.startswith("pipeline."):
                     continue
-                source_method, separator, _ = reference.partition('.')
+                source_method, separator, _ = reference.partition(".")
                 if separator and source_method in pipeline.tasks:
                     pipeline.add_connection(source_method, method_config.id)
 
         # Add pooling rules
         for method_id, pooling_rule_config in config.pooling_rules.items():
             # Convert pooling rule to string format
-            if pooling_rule_config.strategy == 'best':
+            if pooling_rule_config.strategy == "best":
                 rule_str = f"best[{pooling_rule_config.metric}]"
                 if pooling_rule_config.minimize:
                     rule_str += ":minimize"
-            elif pooling_rule_config.strategy == 'custom':
+            elif pooling_rule_config.strategy == "custom":
                 rule_str = f"custom[{pooling_rule_config.function}]"
             else:
                 rule_str = pooling_rule_config.strategy
@@ -293,7 +315,9 @@ class Pipeline:
         # Validate the constructed pipeline
         is_valid, errors = pipeline.validate()
         if not is_valid:
-            error_msg = "Invalid pipeline configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+            error_msg = "Invalid pipeline configuration:\n" + "\n".join(
+                f"  - {e}" for e in errors
+            )
             raise ConfigurationError(error_msg)
 
         return pipeline

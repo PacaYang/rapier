@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
 import warnings
 
+from rapier.core.resources import ResourceController
+
 
 @dataclass
 class MethodConfig:
@@ -20,6 +22,7 @@ class MethodConfig:
         description: Optional description
         parameters: Method-specific parameters
         resources: Resource requirements (CPUs, memory, GPUs, etc.)
+        resource_controller: Single resource request, replacing legacy resources
         failure_policy: How to handle failures ('stop', 'continue', 'retry')
         retry_count: Number of retries if failure_policy is 'retry'
     """
@@ -33,6 +36,7 @@ class MethodConfig:
     resources: Optional[Dict[str, Any]] = None
     failure_policy: str = "stop"
     retry_count: int = 1
+    resource_controller: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Validate method configuration after initialization."""
@@ -40,7 +44,7 @@ class MethodConfig:
             raise ValueError("Method id cannot be empty")
         if not self.type:
             raise ValueError("Method type cannot be empty")
-        if self.failure_policy not in ('stop', 'continue', 'retry'):
+        if self.failure_policy not in ("stop", "continue", "retry"):
             raise ValueError(f"Invalid failure_policy: {self.failure_policy}")
         if self.retry_count < 1:
             raise ValueError("retry_count must be at least 1")
@@ -58,27 +62,43 @@ class MethodConfig:
         # Keep the public v1 attribute as a read-compatible alias.
         self.parameters = self.config
 
+        if self.resource_controller is not None and self.resources is not None:
+            raise ValueError(
+                f"Method '{self.id}' cannot define both 'resource_controller' "
+                "and legacy 'resources'"
+            )
+        resource_request = (
+            self.resource_controller
+            if self.resource_controller is not None
+            else self.resources
+        )
+        self.resource_controller = ResourceController(resource_request).to_dict()
+        # Existing callers can continue reading the normalized request here.
+        self.resources = self.resource_controller
+
         for port_name, reference in self.inputs.items():
             if not isinstance(port_name, str) or not port_name:
                 raise ValueError("Method input port names must be non-empty strings")
             if not isinstance(reference, str) or not reference:
-                raise ValueError(f"Input reference for port '{port_name}' must be a string")
+                raise ValueError(
+                    f"Input reference for port '{port_name}' must be a string"
+                )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
         return {
-            'id': self.id,
-            'type': self.type,
-            'description': self.description,
-            'inputs': self.inputs,
-            'config': self.config,
-            'resources': self.resources,
-            'failure_policy': self.failure_policy,
-            'retry_count': self.retry_count
+            "id": self.id,
+            "type": self.type,
+            "description": self.description,
+            "inputs": self.inputs,
+            "config": self.config,
+            "resource_controller": dict(self.resource_controller),
+            "failure_policy": self.failure_policy,
+            "retry_count": self.retry_count,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MethodConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "MethodConfig":
         """
         Create MethodConfig from dictionary.
 
@@ -89,15 +109,16 @@ class MethodConfig:
             MethodConfig instance
         """
         return cls(
-            id=data['id'],
-            type=data['type'],
-            description=data.get('description'),
-            inputs=data.get('inputs', {}),
-            config=data.get('config', {}),
-            parameters=data.get('parameters') if 'parameters' in data else None,
-            resources=data.get('resources'),
-            failure_policy=data.get('failure_policy', 'stop'),
-            retry_count=data.get('retry_count', 1)
+            id=data["id"],
+            type=data["type"],
+            description=data.get("description"),
+            inputs=data.get("inputs", {}),
+            config=data.get("config", {}),
+            parameters=data.get("parameters") if "parameters" in data else None,
+            resources=data.get("resources"),
+            resource_controller=data.get("resource_controller"),
+            failure_policy=data.get("failure_policy", "stop"),
+            retry_count=data.get("retry_count", 1),
         )
 
 
@@ -126,19 +147,23 @@ class ConnectionConfig:
         if not self.to_method:
             raise ValueError("to_method cannot be empty")
 
-        if self.connection_type not in ('serial', 'parallel'):
+        if self.connection_type not in ("serial", "parallel"):
             raise ValueError(f"Invalid connection_type: {self.connection_type}")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
         return {
-            'from': self.from_methods if len(self.from_methods) > 1 else self.from_methods[0],
-            'to': self.to_method,
-            'type': self.connection_type
+            "from": (
+                self.from_methods
+                if len(self.from_methods) > 1
+                else self.from_methods[0]
+            ),
+            "to": self.to_method,
+            "type": self.connection_type,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ConnectionConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "ConnectionConfig":
         """
         Create ConnectionConfig from dictionary.
 
@@ -149,9 +174,9 @@ class ConnectionConfig:
             ConnectionConfig instance
         """
         return cls(
-            from_methods=data['from'],
-            to_method=data['to'],
-            connection_type=data.get('type', 'serial')
+            from_methods=data["from"],
+            to_method=data["to"],
+            connection_type=data.get("type", "serial"),
         )
 
 
@@ -174,29 +199,29 @@ class PoolingRuleConfig:
 
     def __post_init__(self):
         """Validate pooling rule configuration."""
-        valid_strategies = {'any', 'all', 'majority', 'best', 'first', 'custom'}
+        valid_strategies = {"any", "all", "majority", "best", "first", "custom"}
         if self.strategy not in valid_strategies:
             raise ValueError(f"Invalid pooling strategy: {self.strategy}")
 
-        if self.strategy == 'best' and not self.metric:
+        if self.strategy == "best" and not self.metric:
             raise ValueError("'best' strategy requires a metric")
 
-        if self.strategy == 'custom' and not self.function:
+        if self.strategy == "custom" and not self.function:
             raise ValueError("'custom' strategy requires a function")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
-        result = {'strategy': self.strategy}
+        result = {"strategy": self.strategy}
         if self.metric:
-            result['metric'] = self.metric
+            result["metric"] = self.metric
         if self.minimize:
-            result['minimize'] = self.minimize
+            result["minimize"] = self.minimize
         if self.function:
-            result['function'] = self.function
+            result["function"] = self.function
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'PoolingRuleConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "PoolingRuleConfig":
         """
         Create PoolingRuleConfig from dictionary.
 
@@ -207,8 +232,8 @@ class PoolingRuleConfig:
             PoolingRuleConfig instance
         """
         return cls(
-            strategy=data['strategy'],
-            metric=data.get('metric'),
-            minimize=data.get('minimize', False),
-            function=data.get('function')
+            strategy=data["strategy"],
+            metric=data.get("metric"),
+            minimize=data.get("minimize", False),
+            function=data.get("function"),
         )

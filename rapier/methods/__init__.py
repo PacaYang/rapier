@@ -21,7 +21,7 @@ from .utils import (
 
 # Import concrete method implementations
 from .screening import LigandFilter, MoleculeFilter, SimilaritySearch
-from .preparation import LigandPreparation, ProteinPreparation
+from .preparation import ColabFoldMSA, LigandPreparation, ProteinPreparation
 from .docking import VinaDocking, SminaDocking
 from .prediction import Boltz2, Boltz2Prediction, Boltz2PredictionMethod
 from .prediction import AF3Prediction, DrugLAMP, NessoPrediction
@@ -50,6 +50,7 @@ __all__ = [
     # Preparation methods
     "LigandPreparation",
     "ProteinPreparation",
+    "ColabFoldMSA",
     # Docking methods
     "VinaDocking",
     "SminaDocking",

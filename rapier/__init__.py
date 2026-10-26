@@ -22,6 +22,7 @@ from rapier.core import (
     OutputSpec,
     PortSpec,
     ResourceSpec,
+    ResourceController,
 )
 from rapier.artifacts import (
     Artifact,
@@ -72,6 +73,7 @@ __all__ = [
     "ConfigSpec",
     "EnvironmentSpec",
     "ResourceSpec",
+    "ResourceController",
     # Data types
     "Sequence",
     "ProteinSequence",

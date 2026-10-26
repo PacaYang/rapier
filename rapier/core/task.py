@@ -2,13 +2,19 @@
 Task class representing a single method execution instance.
 """
 
-import uuid
-from typing import Dict, Any, Optional
+import copy
+from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 from pathlib import Path
 from datetime import datetime
 
 from rapier.core.enums import TaskStatus, FailurePolicy
 from rapier.artifacts import artifact_from_data, artifact_to_data
+from rapier.core.resources import ResourceController
+
+if TYPE_CHECKING:
+    from rapier.core.method import Method
+    from rapier.core.pipeline import Pipeline
+    from rapier.slurm import SlurmJob
 
 
 class Task:
@@ -21,9 +27,10 @@ class Task:
     def __init__(
         self,
         task_id: str,
-        method: Optional['Method'],
+        method: Optional["Method"],
         inputs: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
+        resource_controller: Optional[Mapping[str, Any]] = None,
     ):
         """
         Initialize task.
@@ -33,15 +40,33 @@ class Task:
             method: Method to execute
             inputs: Input values for the method
             metadata: Additional task metadata
+            resource_controller: Resource request, resolved against method defaults
         """
         self.task_id = task_id
-        self.method = method
+        # A reused method definition needs a separate instance to keep each
+        # execution's controller attached to its own method.
+        self.method = (
+            copy.copy(method)
+            if method is not None and hasattr(method, "resource_controller")
+            else method
+        )
         self.inputs = inputs
         self.outputs: Dict[str, Any] = {}
         self.intermediate_outputs: Dict[str, Any] = {}
         self.status = TaskStatus.PENDING
-        self.metadata = metadata or {}
-        self.pipeline: Optional['Pipeline'] = None
+        self.metadata = dict(metadata or {})
+        request = resource_controller
+        if request is None:
+            request = self.metadata.get("resource_controller")
+        if request is None:
+            request = self.metadata.get("resources")
+        defaults = getattr(self.method, "resource_spec", None)
+        self.resource_controller = ResourceController.resolve(defaults, request)
+        if self.method is not None:
+            self.method.resource_controller = self.resource_controller
+        self.metadata["resources"] = self.resource_controller.to_dict()
+        self.metadata["resource_controller"] = self.resource_controller.to_dict()
+        self.pipeline: Optional["Pipeline"] = None
 
         # Execution context
         self.work_dir: Optional[Path] = None
@@ -80,27 +105,32 @@ class Task:
             Dictionary representation
         """
         return {
-            'task_id': self.task_id,
-            'method_name': self.method.name if self.method else None,
-            'inputs': artifact_to_data(self.inputs),
-            'outputs': artifact_to_data(self.outputs),
-            'intermediate_outputs': artifact_to_data(self.intermediate_outputs),
-            'status': self.status.name,
-            'metadata': self.metadata,
-            'work_dir': str(self.work_dir) if self.work_dir else None,
-            'slurm_job_id': self.slurm_job_id,
-            'created_at': self.created_at.isoformat(),
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
-            'duration': self.duration,
-            'failure_policy': self.failure_policy.name,
-            'retry_count': self.retry_count,
-            'max_retries': self.max_retries,
-            'error_message': self.error_message,
+            "task_id": self.task_id,
+            "method_name": self.method.name if self.method else None,
+            "inputs": artifact_to_data(self.inputs),
+            "outputs": artifact_to_data(self.outputs),
+            "intermediate_outputs": artifact_to_data(self.intermediate_outputs),
+            "status": self.status.name,
+            "metadata": self.metadata,
+            "resource_controller": self.resource_controller.to_dict(),
+            "work_dir": str(self.work_dir) if self.work_dir else None,
+            "slurm_job_id": self.slurm_job_id,
+            "created_at": self.created_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+            "duration": self.duration,
+            "failure_policy": self.failure_policy.name,
+            "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
+            "error_message": self.error_message,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], method: Optional['Method'] = None) -> 'Task':
+    def from_dict(
+        cls, data: Dict[str, Any], method: Optional["Method"] = None
+    ) -> "Task":
         """
         Deserialize task from dictionary.
 
@@ -112,35 +142,38 @@ class Task:
             Task instance
         """
         task = cls(
-            task_id=data['task_id'],
+            task_id=data["task_id"],
             method=method,
-            inputs=artifact_from_data(data['inputs']),
-            metadata=data.get('metadata', {}),
+            inputs=artifact_from_data(data["inputs"]),
+            metadata=data.get("metadata", {}),
+            resource_controller=data.get("resource_controller"),
         )
-        task.outputs = artifact_from_data(data.get('outputs', {}))
-        task.intermediate_outputs = artifact_from_data(data.get('intermediate_outputs', {}))
-        task.status = TaskStatus[data['status']]
-        task.slurm_job_id = data.get('slurm_job_id')
-        task.retry_count = data.get('retry_count', 0)
-        task.max_retries = data.get('max_retries', 0)
-        task.error_message = data.get('error_message')
+        task.outputs = artifact_from_data(data.get("outputs", {}))
+        task.intermediate_outputs = artifact_from_data(
+            data.get("intermediate_outputs", {})
+        )
+        task.status = TaskStatus[data["status"]]
+        task.slurm_job_id = data.get("slurm_job_id")
+        task.retry_count = data.get("retry_count", 0)
+        task.max_retries = data.get("max_retries", 0)
+        task.error_message = data.get("error_message")
 
-        if data.get('work_dir'):
-            task.work_dir = Path(data['work_dir'])
+        if data.get("work_dir"):
+            task.work_dir = Path(data["work_dir"])
 
-        if data.get('failure_policy'):
-            task.failure_policy = FailurePolicy[data['failure_policy']]
+        if data.get("failure_policy"):
+            task.failure_policy = FailurePolicy[data["failure_policy"]]
 
-        if data.get('created_at'):
-            task.created_at = datetime.fromisoformat(data['created_at'])
-        if data.get('started_at'):
-            task.started_at = datetime.fromisoformat(data['started_at'])
-        if data.get('completed_at'):
-            task.completed_at = datetime.fromisoformat(data['completed_at'])
+        if data.get("created_at"):
+            task.created_at = datetime.fromisoformat(data["created_at"])
+        if data.get("started_at"):
+            task.started_at = datetime.fromisoformat(data["started_at"])
+        if data.get("completed_at"):
+            task.completed_at = datetime.fromisoformat(data["completed_at"])
 
         return task
 
-    def update_from_slurm_job(self, job: 'SlurmJob') -> None:
+    def update_from_slurm_job(self, job: "SlurmJob") -> None:
         """
         Update task from SLURM job information.
 
@@ -163,7 +196,9 @@ class Task:
         status_map = {
             SlurmJobStatus.PENDING: TaskStatus.PENDING,
             SlurmJobStatus.RUNNING: TaskStatus.RUNNING,
-            SlurmJobStatus.COMPLETED: TaskStatus.COMPLETED if job.succeeded else TaskStatus.FAILED,
+            SlurmJobStatus.COMPLETED: (
+                TaskStatus.COMPLETED if job.succeeded else TaskStatus.FAILED
+            ),
             SlurmJobStatus.FAILED: TaskStatus.FAILED,
             SlurmJobStatus.CANCELLED: TaskStatus.FAILED,
             SlurmJobStatus.TIMEOUT: TaskStatus.FAILED,
@@ -180,4 +215,6 @@ class Task:
 
     def __repr__(self) -> str:
         method_name = self.method.name if self.method else "None"
-        return f"Task(id={self.task_id}, method={method_name}, status={self.status.name})"
+        return (
+            f"Task(id={self.task_id}, method={method_name}, status={self.status.name})"
+        )

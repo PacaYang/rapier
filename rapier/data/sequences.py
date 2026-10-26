@@ -19,7 +19,27 @@ class Sequence(Artifact):
     def check_value(cls, artifact: Artifact) -> List[str]:
         if artifact.storage != ArtifactStorage.INLINE or not cls.alphabet:
             return []
-        sequence = re.sub(r"\s+", "", str(artifact.value)).upper()
+        text = str(artifact.value).strip()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if any(line.startswith(">") for line in lines):
+            if not lines[0].startswith(">"):
+                return ["FASTA sequence must start with a header"]
+            residues = []
+            has_residues = False
+            for index, line in enumerate(lines):
+                if line.startswith(">"):
+                    if not line[1:].strip():
+                        return ["FASTA record header cannot be empty"]
+                    if index and not has_residues:
+                        return ["FASTA record cannot be empty"]
+                    has_residues = False
+                else:
+                    residues.append(line)
+                    has_residues = True
+            if not has_residues:
+                return ["FASTA record cannot be empty"]
+            text = "".join(residues)
+        sequence = re.sub(r"\s+", "", text).upper()
         if not sequence:
             return ["Inline sequence cannot be empty"]
         invalid = sorted(set(sequence) - set(cls.alphabet))
@@ -31,6 +51,8 @@ class Sequence(Artifact):
     def from_string(
         cls, sequence: str, metadata: Optional[Dict[str, Any]] = None
     ) -> "Sequence":
+        if sequence.lstrip().startswith(">"):
+            return cls.inline(sequence.strip(), "fasta", metadata)
         return cls.inline(re.sub(r"\s+", "", sequence), "inline", metadata)
 
     @classmethod
@@ -44,6 +66,8 @@ class Sequence(Artifact):
         stem: str = "data",
     ) -> Artifact:
         # A bare residue string is a sequence, not a file name.
+        if isinstance(value, str) and value.lstrip().startswith(">"):
+            return cls.inline(value.strip(), "fasta", type_name=type_name)
         if isinstance(value, str) and not Path(value).suffix:
             try:
                 exists = Path(value).exists()

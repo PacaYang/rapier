@@ -1,6 +1,7 @@
 // Shared editor state, graph helpers and socket compatibility.
 
 export const ARTIFACT_PORT = 'artifact';
+export const OUTPUT_PATH_TEMPLATE = '{working_dir}/{region}/{task_id}/outputs';
 const STORAGE_KEY = 'rapier.workflowBuilder.graph';
 
 export const state = {
@@ -13,14 +14,52 @@ export const state = {
 };
 
 export function emptyGraph() {
-  return { pipeline: { name: 'my_pipeline', version: '1.0.0', failure_policy: 'stop', extra: {} }, nodes: [], edges: [] };
+  return { pipeline: { name: 'my_pipeline', version: '1.0.0', failure_policy: 'stop', metadata: { working_dir: '.', region: 'default' }, metadata_file: 'my_pipeline.meta.yaml', extra: {} }, nodes: [], edges: [] };
 }
+
+export function resourceDefaults(node) {
+  const defaults = methodInfo(node)?.resources || {};
+  const result = { cpus: 1, gpus: 0, memory: '4GB', time_limit: '1:00:00', nodes: 1, ...defaults };
+  result.time_limit = defaults.time_limit ?? defaults.time ?? result.time_limit;
+  delete result.time;
+  return result;
+}
+
+// Normalize old autosaves and palette-created methods into the current graph contract.
+export function normalizeGraph(graph) {
+  const sourcePipeline = graph.pipeline || {};
+  const sourceMetadata = sourcePipeline.metadata || sourcePipeline.meta || graph.metadata || {};
+  const sourceName = sourcePipeline.name || 'pipeline';
+  graph.pipeline = { ...emptyGraph().pipeline, ...sourcePipeline };
+  graph.pipeline.metadata = { ...emptyGraph().pipeline.metadata, ...sourceMetadata };
+  if (!sourcePipeline.metadata_file || !String(sourcePipeline.metadata_file).trim()) {
+    graph.pipeline.metadata_file = `${sourceName}.meta.yaml`;
+  }
+  delete graph.pipeline.meta;
+  delete graph.metadata;
+  graph.pipeline.extra = graph.pipeline.extra || {};
+  graph.nodes = graph.nodes || [];
+  graph.edges = graph.edges || [];
+  for (const node of graph.nodes) {
+    if (node.kind !== 'method') continue;
+    const controller = { ...(node.resources || {}), ...(node.resource_controller || {}) };
+    if (controller.time_limit == null && controller.time != null) controller.time_limit = controller.time;
+    delete controller.time;
+    node.resource_controller = { ...resourceDefaults(node), ...controller };
+    delete node.resources;
+    node.config = node.config || {};
+  }
+  return graph;
+}
+
+export const outputPathPlaceholder = () => OUTPUT_PATH_TEMPLATE;
 
 const listeners = new Set();
 export const subscribe = (fn) => listeners.add(fn);
 
 // Every graph mutation goes through commit so views and autosave stay in sync.
 export function commit(reason = 'graph') {
+  normalizeGraph(state.graph);
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.graph)); } catch { /* quota / private mode */ }
   listeners.forEach((fn) => fn(reason));
 }

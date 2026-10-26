@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import yaml
 
 from ...artifacts import Artifact
+from ..msa import protein_records, read_text as read_msa_text, resolve_msas
+
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -56,8 +58,14 @@ def _confidence_score(path: Path) -> Optional[float]:
     if not isinstance(payload, dict):
         return None
     preferred = (
-        "confidence_score", "confidence", "ranking_score", "complex_plddt",
-        "iptm", "ptm", "pTMscore", "complex_score",
+        "confidence_score",
+        "confidence",
+        "ranking_score",
+        "complex_plddt",
+        "iptm",
+        "ptm",
+        "pTMscore",
+        "complex_score",
     )
     for key in preferred:
         if key in payload:
@@ -77,7 +85,7 @@ def _matching_confidence(structure: Path, reports: Sequence[Path]) -> Optional[f
     for report in reports:
         report_stem = report.stem.lower()
         if report_stem.startswith("confidence_"):
-            report_stem = report_stem[len("confidence_"):]
+            report_stem = report_stem[len("confidence_") :]
         if report_stem in stem or stem in report_stem:
             candidates.append(report)
     if len(candidates) == 1:
@@ -87,7 +95,9 @@ def _matching_confidence(structure: Path, reports: Sequence[Path]) -> Optional[f
     return None
 
 
-def _select_structure(structures: Sequence[Path], reports: Sequence[Path]) -> Tuple[Path, Optional[float], bool]:
+def _select_structure(
+    structures: Sequence[Path], reports: Sequence[Path]
+) -> Tuple[Path, Optional[float], bool]:
     """Select the highest-confidence structure with deterministic fallback."""
     scored = [(path, _matching_confidence(path, reports)) for path in structures]
     usable = [(path, score) for path, score in scored if score is not None]
@@ -98,7 +108,9 @@ def _select_structure(structures: Sequence[Path], reports: Sequence[Path]) -> Tu
     return sorted(structures, key=lambda path: str(path))[0], None, True
 
 
-def _ligand_coordinates(structure: Any, ligand_ids: Sequence[str]) -> List[Tuple[float, float, float]]:
+def _ligand_coordinates(
+    structure: Any, ligand_ids: Sequence[str]
+) -> List[Tuple[float, float, float]]:
     """Extract all atom coordinates from the selected model's ligand chains."""
     wanted = {str(item) for item in ligand_ids}
     coordinates: List[Tuple[float, float, float]] = []
@@ -110,7 +122,9 @@ def _ligand_coordinates(structure: Any, ligand_ids: Sequence[str]) -> List[Tuple
             continue
         for residue in chain:
             for atom in residue:
-                coordinates.append((float(atom.pos.x), float(atom.pos.y), float(atom.pos.z)))
+                coordinates.append(
+                    (float(atom.pos.x), float(atom.pos.y), float(atom.pos.z))
+                )
     return coordinates
 
 
@@ -212,7 +226,9 @@ def _fasta_records(text: str) -> List[Tuple[Optional[str], str]]:
 
 
 def _split_sdf(text: str) -> List[str]:
-    return [record.strip() + "\n$$$$\n" for record in text.split("$$$$") if record.strip()]
+    return [
+        record.strip() + "\n$$$$\n" for record in text.split("$$$$") if record.strip()
+    ]
 
 
 def _sdf_to_smiles(text: str) -> List[Tuple[Optional[str], str]]:
@@ -247,7 +263,9 @@ def _next_chain_id(used: Set[str]) -> str:
         index += 1
 
 
-def _metadata_id(artifact: Artifact, used: Set[str], fallback: Optional[str] = None) -> str:
+def _metadata_id(
+    artifact: Artifact, used: Set[str], fallback: Optional[str] = None
+) -> str:
     requested = artifact.metadata.get("chain_id", artifact.metadata.get("id", fallback))
     if isinstance(requested, (list, tuple)):
         requested = requested[0] if requested else None
@@ -293,23 +311,82 @@ def _record_chain_id(
     return _entity_id(requested, used, f"ligand_{index}")
 
 
-def _load_msa_map(msas: Sequence[Artifact], work_dir: Path) -> Dict[str, str]:
+def _load_msa_map(
+    msas: Sequence[Artifact],
+    records: Sequence[Dict[str, Any]],
+    work_dir: Path,
+) -> Dict[str, str]:
+    """Resolve and stage the unified MSA port for every protein chain.
+
+    ``resolve_msas`` performs the contract checks (exact chain coverage and
+    query/sequence validation).  This function only converts inline artifacts
+    to files because Boltz's YAML interface requires paths.
+    """
+    resolved = resolve_msas(msas, records)
     result: Dict[str, str] = {}
-    for index, artifact in enumerate(msas):
-        chain_id = artifact.metadata.get("chain_id", artifact.metadata.get("id"))
+    for index, (chain_id, artifact) in enumerate(resolved.items()):
         if artifact.is_file:
-            value = str(artifact.path)
-        else:
-            msa_path = work_dir / f"msa_{index}.{artifact.format}"
-            msa_path.write_text(str(artifact.value))
-            value = str(msa_path)
-        if isinstance(chain_id, (list, tuple)):
-            for item in chain_id:
-                if item:
-                    result[str(item)] = value
-        elif chain_id:
-            result[str(chain_id)] = value
+            result[str(chain_id)] = str(artifact.path)
+            continue
+        msa_path = (
+            work_dir / f"msa_{_safe_name(chain_id, f'msa_{index}')}.{artifact.format}"
+        )
+        msa_path.write_text(read_msa_text(artifact))
+        result[str(chain_id)] = str(msa_path)
     return result
+
+
+def _resolved_protein_entities(
+    destination: List[Dict[str, Any]],
+    records: Sequence[Dict[str, Any]],
+    msa_map: Dict[str, str],
+    used: Set[str],
+    artifacts: Sequence[Artifact] = (),
+    config: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Write one Boltz protein entity for each canonical chain.
+
+    ``msa_map`` represents the authoritative unified ``msa`` port. When it
+    is empty, per-artifact metadata and configured fallbacks retain the
+    historical behavior while using stable chain IDs.
+    """
+    config = config or {}
+    metadata_by_artifact = {artifact.artifact_id: artifact for artifact in artifacts}
+    for index, record in enumerate(records):
+        chain_id = str(record.get("chain_id") or "")
+        sequence = str(record.get("sequence") or "")
+        if not chain_id or not sequence:
+            raise ValueError(
+                f"Protein MSA record {index} is missing chain_id or sequence"
+            )
+        # The shared resolver has already rejected duplicate chain IDs.  Keep
+        # this guard because a collision with a non-protein entity would make
+        # the generated Boltz document ambiguous.
+        if chain_id in used:
+            raise ValueError(f"Duplicate Boltz chain ID '{chain_id}'")
+        used.add(chain_id)
+        msa_path = msa_map.get(chain_id)
+        source_artifact = metadata_by_artifact.get(record.get("source_artifact_id"))
+        source_msa = source_artifact.metadata.get("msa") if source_artifact else None
+        if msa_path:
+            pass
+        elif source_msa:
+            msa_path = str(source_msa)
+        elif config.get("use_msa_server", True):
+            pass
+        elif config.get("single_sequence_mode"):
+            msa_path = "empty"
+        else:
+            raise ValueError(f"Protein chain '{chain_id}' has no MSA supplied")
+        protein: Dict[str, Any] = {"id": chain_id, "sequence": sequence}
+        if msa_path:
+            protein["msa"] = msa_path
+        if source_artifact is not None:
+            if source_artifact.metadata.get("modifications"):
+                protein["modifications"] = source_artifact.metadata["modifications"]
+            if source_artifact.metadata.get("cyclic") is not None:
+                protein["cyclic"] = bool(source_artifact.metadata["cyclic"])
+        destination.append({"protein": protein})
 
 
 def _add_polymer_entities(
@@ -344,7 +421,9 @@ def _add_polymer_entities(
                 }
             }
             source_msa = artifact.metadata.get("msa")
-            msa_lookup_id = chain_id[0] if isinstance(chain_id, list) and chain_id else chain_id
+            msa_lookup_id = (
+                chain_id[0] if isinstance(chain_id, list) and chain_id else chain_id
+            )
             msa = source_msa or msa_map.get(str(msa_lookup_id))
             if entity_type == "protein":
                 if msa:
@@ -355,11 +434,14 @@ def _add_polymer_entities(
                     entity[entity_type]["msa"] = "empty"
                 else:
                     raise ValueError(
-                        f"Protein chain '{chain_id}' has no MSA; enable use_msa_server, "
+                        f"Protein chain '{chain_id}' has no MSA; enable "
+                        "use_msa_server, "
                         "provide an MSA artifact, or set single_sequence_mode"
                     )
             if artifact.metadata.get("modifications"):
-                entity[entity_type]["modifications"] = artifact.metadata["modifications"]
+                entity[entity_type]["modifications"] = artifact.metadata[
+                    "modifications"
+                ]
             if artifact.metadata.get("cyclic") is not None:
                 entity[entity_type]["cyclic"] = bool(artifact.metadata["cyclic"])
             destination.append(entity)
@@ -390,12 +472,15 @@ def _add_ligand_entities(
                 destination.append({"ligand": {"id": chain_id, "smiles": smiles}})
             continue
         if artifact.format == "sdf":
-            for index, (name, smiles) in enumerate(_sdf_to_smiles(_read_text(artifact))):
+            for index, (name, smiles) in enumerate(
+                _sdf_to_smiles(_read_text(artifact))
+            ):
                 chain_id = _record_chain_id(artifact, index, name, used)
                 destination.append({"ligand": {"id": chain_id, "smiles": smiles}})
             continue
         raise ValueError(
-            f"Boltz ligands require smiles, sdf, or CCD metadata; received {artifact.format}"
+            f"Boltz ligands require smiles, sdf, or CCD metadata; received "
+            f"{artifact.format}"
         )
 
 
@@ -407,11 +492,23 @@ def build_input_yaml(
     """Translate normalized Rapier artifacts into a Boltz prediction YAML."""
     sequences: List[Dict[str, Any]] = []
     used: Set[str] = set()
-    msas = _artifact_list(inputs.get("msas"))
-    msa_map = _load_msa_map(msas, output_path.parent)
-    _add_polymer_entities(
-        sequences, _artifact_list(inputs.get("proteins")), "protein", used, msa_map, config
-    )
+    proteins = _artifact_list(inputs.get("proteins"))
+    msas = _artifact_list(inputs.get("msa"))
+    msa_map: Dict[str, str] = {}
+    if msas:
+        if not proteins:
+            raise ValueError("Boltz MSA input requires at least one protein sequence")
+        records = protein_records(proteins)
+        msa_map = _load_msa_map(msas, records, output_path.parent)
+        # A supplied MSA is authoritative.  Resolve and emit every protein
+        # chain independently so homomers can carry distinct chain-tagged
+        # alignments from ColabFold.
+        _resolved_protein_entities(sequences, records, msa_map, used, proteins, config)
+    else:
+        # No unified MSA was supplied: retain Boltz's historical metadata MSA,
+        # server, and single-sequence behavior unchanged, with canonical IDs.
+        records = protein_records(proteins) if proteins else []
+        _resolved_protein_entities(sequences, records, {}, used, proteins, config)
     _add_polymer_entities(
         sequences, _artifact_list(inputs.get("dna")), "dna", used, msa_map, config
     )
@@ -420,7 +517,9 @@ def build_input_yaml(
     )
     _add_ligand_entities(sequences, _artifact_list(inputs.get("ligands")), used)
     if not sequences:
-        raise ValueError("Boltz requires at least one protein, nucleic-acid, or ligand entity")
+        raise ValueError(
+            "Boltz requires at least one protein, nucleic-acid, or ligand entity"
+        )
 
     document: Dict[str, Any] = {"version": 1, "sequences": sequences}
     constraints = config.get("constraints")
@@ -448,19 +547,25 @@ def build_input_yaml(
         else:
             document["properties"] = [affinity_property]
 
-    templates = []
-    for artifact in _artifact_list(inputs.get("templates")):
-        if not artifact.is_file:
-            raise ValueError("Boltz templates must be file-backed structure artifacts")
-        entry: Dict[str, Any] = {
-            "cif" if artifact.format == "cif" else "pdb": str(artifact.path)
-        }
-        for key in ("chain_id", "template_id", "force", "threshold"):
-            if key in artifact.metadata:
-                entry[key] = artifact.metadata[key]
-        templates.append(entry)
-    if templates:
-        document["templates"] = templates
+    # A supplied unified MSA disables template handling for the Boltz job.  In
+    # particular, do not inspect or stage stale template artifacts: the MSA
+    # port has higher priority than every template-related input.
+    if not msas:
+        templates = []
+        for artifact in _artifact_list(inputs.get("templates")):
+            if not artifact.is_file:
+                raise ValueError(
+                    "Boltz templates must be file-backed structure artifacts"
+                )
+            entry: Dict[str, Any] = {
+                "cif" if artifact.format == "cif" else "pdb": str(artifact.path)
+            }
+            for key in ("chain_id", "template_id", "force", "threshold"):
+                if key in artifact.metadata:
+                    entry[key] = artifact.metadata[key]
+            templates.append(entry)
+        if templates:
+            document["templates"] = templates
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(yaml.safe_dump(document, sort_keys=False))
@@ -501,6 +606,42 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     config = dict(manifest["config"])
 
+    # The unified ``msa`` port is authoritative.  ``prepare`` records this
+    # explicitly so a complete supplied alignment cannot trigger a remote
+    # search or single-sequence fallback.  The YAML inspection keeps direct
+    # runner callers backwards-compatible when they provide the marker only
+    # implicitly through an all-protein MSA document.
+    msa_marker = manifest.get("msa_supplied")
+    supplied_msa = bool(msa_marker) if msa_marker is not None else False
+    input_document = None
+    if msa_marker is None:
+        try:
+            input_document = yaml.safe_load(input_yaml.read_text())
+            protein_entities = [
+                item.get("protein")
+                for item in (input_document or {}).get("sequences", [])
+                if isinstance(item, dict) and isinstance(item.get("protein"), dict)
+            ]
+            supplied_msa = bool(protein_entities) and all(
+                isinstance(entity.get("msa"), str) and entity.get("msa")
+                for entity in protein_entities
+            )
+        except Exception:
+            supplied_msa = False
+
+    if supplied_msa:
+        # Enforce MSA precedence for direct runner callers as well as the
+        # normal Method.prepare path.  The latter already omits templates,
+        # while a hand-written manifest may still contain a top-level block.
+        try:
+            if input_document is None:
+                input_document = yaml.safe_load(input_yaml.read_text())
+            if isinstance(input_document, dict) and "templates" in input_document:
+                input_document.pop("templates", None)
+                input_yaml.write_text(yaml.safe_dump(input_document, sort_keys=False))
+        except Exception as exc:
+            raise RuntimeError(f"Could not apply supplied-MSA template override: {exc}")
+
     command = ["boltz", "predict", str(input_yaml), "--out_dir", str(output_dir)]
     for key, option in (
         ("cache", "--cache"),
@@ -533,8 +674,11 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
         ("subsample_msa", "--subsample_msa"),
         ("no_kernels", "--no_kernels"),
     ):
-        _flag(command, option, config.get(key))
-    if config.get("use_msa_server"):
+        value = config.get(key)
+        if supplied_msa and key == "use_msa_server":
+            value = False
+        _flag(command, option, value)
+    if config.get("use_msa_server") and not supplied_msa:
         _flag(command, "--msa_server_url", config.get("msa_server_url"))
         _flag(command, "--msa_pairing_strategy", config.get("msa_pairing_strategy"))
 
@@ -565,13 +709,25 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
             prediction_dir = matching[0]
         elif len(candidates) == 1:
             prediction_dir = candidates[0]
-    structures = sorted(
-        list(prediction_dir.glob("*_model_*.cif"))
-        + list(prediction_dir.glob("*_model_*.mmcif"))
-        + list(prediction_dir.glob("*_model_*.pdb"))
-    ) if prediction_dir.exists() else []
-    confidence = sorted(prediction_dir.glob("confidence_*.json")) if prediction_dir.exists() else []
-    affinity = sorted(prediction_dir.glob("affinity_*.json")) if prediction_dir.exists() else []
+    structures = (
+        sorted(
+            list(prediction_dir.glob("*_model_*.cif"))
+            + list(prediction_dir.glob("*_model_*.mmcif"))
+            + list(prediction_dir.glob("*_model_*.pdb"))
+        )
+        if prediction_dir.exists()
+        else []
+    )
+    confidence = (
+        sorted(prediction_dir.glob("confidence_*.json"))
+        if prediction_dir.exists()
+        else []
+    )
+    affinity = (
+        sorted(prediction_dir.glob("affinity_*.json"))
+        if prediction_dir.exists()
+        else []
+    )
     arrays = sorted(prediction_dir.glob("*.npz")) if prediction_dir.exists() else []
     if not structures:
         raise RuntimeError("Boltz completed without producing predicted structures")
@@ -591,17 +747,20 @@ def run_manifest(manifest_path: Path) -> Dict[str, Any]:
         ligand_ids = [str(item) for item in mapping.get("ligand_ids", []) if item]
         if not ligand_ids:
             raise RuntimeError(
-                "emit_docking_inputs is enabled but the Boltz manifest has no ligand chain IDs"
+                "emit_docking_inputs is enabled but the Boltz manifest has no "
+                "ligand chain IDs"
             )
         selected, selected_score, fallback = _select_structure(structures, confidence)
-        summary.update(_write_docking_inputs(
-            selected,
-            work_dir / "outputs",
-            ligand_ids,
-            float(config.get("docking_box_padding", 8.0)),
-            selected_score,
-            fallback,
-        ))
+        summary.update(
+            _write_docking_inputs(
+                selected,
+                work_dir / "outputs",
+                ligand_ids,
+                float(config.get("docking_box_padding", 8.0)),
+                selected_score,
+                fallback,
+            )
+        )
     summary_path = work_dir / "outputs" / "boltz2_run.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2))

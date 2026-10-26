@@ -131,6 +131,23 @@ PDBQT back through Open Babel can lose bond orders and formal charges. Meeko's
 conda install -c conda-forge openbabel
 ```
 
+### ColabFold MSA Server
+
+The `colabfold_msa` method submits protein sequences to the configured
+ColabFold-compatible MSA API and writes one validated A3M file per chain. The
+default endpoint is `https://api.colabfold.com`; the execution host needs
+outbound network access to that endpoint (or to a compatible self-hosted
+server). No ColabFold or scientific Python package is required by Rapier; the
+method uses the Python standard library HTTP client. Configure
+`msa_server_url`, `use_env`, `use_filter`, and the request/polling timeouts on
+the method when needed.
+
+Bind the method's `msa` output to the optional `msa` input on AF3 and Boltz-2
+to reuse the same alignments. Supplied alignments must cover every protein
+chain. When present, they take precedence over each predictor's native MSA
+search and template handling for that prediction, including explicit Boltz
+template artifacts.
+
 ### Boltz-2
 
 Needed by `boltz2` for biomolecular structure prediction and optional
@@ -150,9 +167,10 @@ command -v boltz
 boltz predict --help
 ```
 
-Boltz can use the remote MSA service with `use_msa_server: true` (the default),
-or you can provide normalized `.a3m`/CSV MSA artifacts. The MSA server may
-require authentication and network access from the compute node.
+Boltz can use its remote MSA service with `use_msa_server: true` (the default),
+or you can bind the validated A3M artifacts from `colabfold_msa` (or Boltz CSV
+MSAs) through the optional `msa` input. The server may require authentication
+and network access from the compute node.
 
 The Boltz-2 → Vina handoff (`emit_docking_inputs: true`) additionally requires
 Gemmi to read the predicted PDB/mmCIF, remove ligand chains, write the receptor,

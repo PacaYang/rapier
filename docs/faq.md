@@ -79,8 +79,9 @@ downstream tasks are skipped, but independent branches keep running. Use
 ### What methods are built in?
 
 `ligand_filter`, `molecule_filter`, `similarity_search`, `ligand_prep`,
-`protein_prep`, `vina_docking`, `smina_docking`, and `boltz2` (also registered
-as `boltz2_prediction`). See the [Method Reference](method_reference.md).
+`protein_prep`, `colabfold_msa`, `vina_docking`, `smina_docking`, `boltz2`,
+`af3`, `drug_lamp`, and `nesso` (with `boltz2_prediction` as a Boltz alias).
+See the [Method Reference](method_reference.md).
 
 ### How do I write my own method?
 

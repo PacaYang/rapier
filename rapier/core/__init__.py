@@ -6,6 +6,7 @@ from rapier.core.method import Method, MethodError, RunContext
 from rapier.core.task import Task
 from rapier.core.pipeline import Pipeline
 from rapier.core.execution_graph import ExecutionGraph
+from rapier.core.resources import ResourceController
 from rapier.core.specs import (
     ConfigField,
     ConfigSpec,
@@ -30,4 +31,5 @@ __all__ = [
     "ConfigSpec",
     "EnvironmentSpec",
     "ResourceSpec",
+    "ResourceController",
 ]

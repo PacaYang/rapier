@@ -1,0 +1,8 @@
+# Relative to this companion file's directory.
+working_dir: ../../runs/workflow_metadata
+
+# Compute location: a cloud region, cluster name, or local execution.
+region: local
+
+# Task output-directory relationship (placeholder only):
+#   {working_dir}/{region}/{task_id}/outputs

@@ -39,11 +39,16 @@ for details.
 | `06_boltz2_prediction.yaml` | `protein + ligand → Boltz-2` | Complex structure and affinity prediction |
 | `07_boltz2_vina.yaml` | `Boltz-2 → ligand prep → Vina` | Derive a receptor and ligand-centered box from a predicted complex, then dock |
 | `08_docking_funnel.yaml` | `fast dock → gate → careful dock → gate` | Two-round screening funnel gated by `molecule_filter` (top 1%, then top 10) |
+| `09_af3_prediction.yaml` | `protein + ligand → AF3` | AlphaFold 3 structure and confidence prediction |
+| `10_drug_lamp_prediction.yaml` | `protein + ligand → DrugLAMP` | Drug-target interaction prediction |
+| `11_nesso_prediction.yaml` | `protein + ligand → Nesso` | Nesso affinity prediction |
+| `12_colabfold_msa.yaml` | `proteins → ColabFold MSA → [AF3, Boltz-2]` | Reuse one chain-specific MSA set in both predictors |
+| `13_workflow_metadata.yaml` | single method | Companion workflow metadata, one resource controller, and output-path placeholder |
 | `simple_serial.yaml` | `A → B → C` | Legacy v1 style: placeholder method types, paths in `config` |
 | `parallel_pooling.yaml` | `[A, B] → Pool → C` | Legacy v1 style: parallel branches with a `best` pooling rule |
 | `multi_step_method.yaml` | five-step DAG | Legacy v1 style: a multi-step Vina workflow sketch |
 
-Examples 01–03 and 06–08 use the normalized form: top-level `inputs`, port
+Examples 01–03 and 06–12 use the normalized form: top-level `inputs`, port
 bindings, and `outputs`. Bindings create the dependencies, so 08 needs no
 `connections`. 04 and 05 use registered methods but rely only on `connections`
 and v1 `config` fields such as `box_center`. The three unnumbered files use
@@ -100,6 +105,25 @@ survives. Round 2 re-docks the survivors at `exhaustiveness: 32`, and a second
 gate keeps the 10 best molecules whose centroid lies in the box. The outputs
 are the hits, their score table, and a JSON report from each gate. It needs
 the same tools as example 03. The filter itself is pure Python.
+
+### 09–11 — Predictors
+The AF3, DrugLAMP, and Nesso examples show the installed protein-ligand
+predictors with normalized sequence and ligand artifacts. Their detailed
+configuration and execution-host requirements are in
+[Predictors](../../docs/predictors.md).
+
+### 12 — Shared ColabFold MSA
+`colabfold_msa` submits the shared protein chains once, then both AF3 and
+Boltz-2 consume its chain-specific A3M outputs. The two predictors therefore
+use exactly the same supplied MSA set; each skips its own MSA and template
+search. The execution host needs network access to the configured ColabFold
+API and the scientific environments required by AF3 and Boltz-2.
+
+### 13 — Workflow Metadata
+`13_workflow_metadata.yaml` keeps its `working_dir` and `region` in the
+companion `13_workflow_metadata.meta.yaml` file. Its method declares one
+`resource_controller`, and the built task records the future output-directory
+relationship as a placeholder without creating directories.
 
 ### Legacy examples
 `simple_serial.yaml`, `parallel_pooling.yaml`, and `multi_step_method.yaml`

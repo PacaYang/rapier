@@ -2,6 +2,7 @@
 import {
   state, commit, esc, nodeById, edgeById, methodInfo, portsOf, compatibility, connect,
   incomingEdge, removeEdge, edgeStatus, pruneDanglingEdges, nodeErrors, ARTIFACT_PORT,
+  resourceDefaults, outputPathPlaceholder, OUTPUT_PATH_TEMPLATE,
 } from './state.js';
 
 const root = () => document.querySelector('#inspector');
@@ -30,9 +31,23 @@ function pipelinePanel() {
     'p.description': (v) => { p.description = v; },
     'p.version': (v) => { p.version = v; },
     'p.failure_policy': (v) => { p.failure_policy = v; },
+    'p.working_dir': (v) => {
+      if (!v.trim()) throw new Error('Working directory cannot be empty');
+      p.metadata.working_dir = v.trim();
+    },
+    'p.region': (v) => {
+      if (!v.trim()) throw new Error('Region cannot be empty');
+      p.metadata.region = v.trim();
+    },
   };
-  return `<h2>Pipeline</h2>
+  return `<h2>Workflow settings</h2>
     <p class="hint">${methods} methods · ${state.graph.nodes.length - methods} inputs/outputs · ${state.graph.edges.length} connections</p>
+    <h3>Workflow metadata</h3>
+    ${field('Working directory', `<input data-field="p.working_dir" aria-label="Working directory" value="${esc(p.metadata.working_dir)}" spellcheck="false">`)}
+    ${field('Compute region / cluster', `<input data-field="p.region" aria-label="Compute region or cluster" value="${esc(p.metadata.region)}" spellcheck="false">`, { desc: 'Compute location, such as us-west-2, cluster_a, or local.' })}
+    <p class="hint">Companion file: <code>${esc(p.metadata_file || `${p.name || 'pipeline'}.meta.yaml`)}</code></p>
+    ${field('Task output directory (placeholder)', `<textarea readonly aria-label="Task output directory placeholder" spellcheck="false">${esc(OUTPUT_PATH_TEMPLATE)}</textarea>`, { desc: 'Reserved for future output directory resolution.' })}
+    <h3>Pipeline</h3>
     ${field('Description', `<textarea data-field="p.description">${esc(p.description || '')}</textarea>`)}
     <div class="row">
       ${field('Version', `<input data-field="p.version" value="${esc(p.version || '')}">`)}
@@ -47,6 +62,43 @@ function pipelinePanel() {
       <li>Delete/Backspace removes the selection; arrows nudge a focused card.</li>
       <li>Scroll to zoom, drag empty canvas to pan.</li>
     </ul>`;
+}
+
+function resourceControllerPanel(node) {
+  const defaults = resourceDefaults(node);
+  const controller = node.resource_controller;
+  const definitions = [
+    ['cpus', 'CPUs', 1], ['gpus', 'GPUs', 0], ['memory', 'Memory'],
+    ['time_limit', 'Time limit'], ['nodes', 'Nodes', 1],
+    ['partition', 'Partition'], ['gpu_type', 'GPU type'],
+  ];
+  const fields = definitions.map(([key, label, minimum]) => {
+    const numeric = minimum != null;
+    const value = controller[key];
+    const defaultValue = defaults[key];
+    const modified = JSON.stringify(value ?? null) !== JSON.stringify(defaultValue ?? null);
+    handlers[`r.${key}`] = (raw) => {
+      if (raw.trim() === '') { delete controller[key]; return; }
+      if (numeric) {
+        const parsed = Number(raw);
+        if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`${label} must be an integer of at least ${minimum}`);
+        controller[key] = parsed;
+      } else controller[key] = raw.trim();
+    };
+    actions[`resource.reset.${key}`] = () => { delete controller[key]; };
+    const reset = modified ? `<button type="button" class="reset" data-action="resource.reset.${key}" aria-label="Reset ${label} to method default">reset</button>` : '';
+    return field(label, `<input ${numeric ? `type="number" min="${minimum}" step="1"` : 'type="text"'}
+      data-field="r.${key}" aria-label="Resource controller ${label}" value="${esc(value ?? '')}" placeholder="${esc(defaultValue ?? 'Automatic')}" spellcheck="false">`,
+    { cls: modified ? 'modified' : '', extra: reset, desc: `Method default: ${defaultValue ?? 'automatic'}` });
+  });
+  return `<section class="resource-controller" aria-label="Method resource controller">
+    <h3>Resource controller</h3>
+    <p class="hint">One controller attached to this method.</p>
+    <div class="row">${fields.slice(0, 2).join('')}</div>
+    <div class="row">${fields.slice(2, 4).join('')}</div>
+    <div class="row">${fields.slice(4, 6).join('')}</div>${fields[6]}
+  </section>
+  ${field('Output directory (placeholder)', `<textarea readonly aria-label="Method output directory placeholder" spellcheck="false">${esc(outputPathPlaceholder(node))}</textarea>`, { desc: 'Reserved for future task output directory resolution.' })}`;
 }
 
 // Candidate sources for an input socket, for keyboard-friendly wiring.
@@ -178,7 +230,7 @@ function methodPanel(node) {
   actions = { delete: () => deleteNode() };
   if (!info) {
     return `<h2>${esc(node.name)}</h2><p class="err-list">Method type <code>${esc(node.method_type)}</code> is not registered.</p>
-      ${errorsBlock(node.id)}<button type="button" class="danger" data-action="delete">Delete card</button>`;
+      ${errorsBlock(node.id)}${resourceControllerPanel(node)}<button type="button" class="danger" data-action="delete">Delete card</button>`;
   }
   const wiring = info.inputs.map((port) => {
     const current = incomingEdge(node.id, port.name);
@@ -193,14 +245,6 @@ function methodPanel(node) {
       .map((e) => { const t = nodeById(e.to.node); return t.kind === 'output' ? `⇒ ${t.name}` : `${t.name}.${e.to.port}`; });
     return `<dt>${esc(p.name)}</dt><dd>${esc(p.types[0])}/${esc(p.formats.join('|'))}${targets.length ? `<br>→ ${esc(targets.join(', '))}` : ''}</dd>`;
   }).join('');
-  const res = info.resources || {};
-  const resourceFields = [['cpus', res.cpus], ['gpus', res.gpus], ['memory', res.memory], ['time_limit', res.time]].map(([k, def]) => {
-    handlers[`r.${k}`] = (v) => {
-      if (v === '') delete node.resources[k];
-      else node.resources[k] = ['cpus', 'gpus'].includes(k) ? parseInt(v, 10) : v;
-    };
-    return field(k, `<input data-field="r.${k}" value="${esc(node.resources[k] ?? '')}" placeholder="${esc(def ?? '')}">`);
-  });
   return `<h2>${esc(info.label)}</h2>
     <p class="hint"><code>${esc(info.name)}</code>${info.demo ? ' · <span class="tag">demo</span>' : ''}</p>
     ${info.doc ? `<div class="doc">${esc(info.doc)}</div>` : ''}
@@ -210,7 +254,7 @@ function methodPanel(node) {
     <h3>Inputs</h3>${wiring || '<p class="hint">No inputs.</p>'}
     <h3>Outputs</h3><dl class="kv">${outputs}</dl>
     <h3>Configuration</h3>${info.config.map((f) => configControl(f, node)).join('') || '<p class="hint">No options.</p>'}
-    <h3>Resources</h3><div class="row">${resourceFields.slice(0, 2).join('')}</div><div class="row">${resourceFields.slice(2).join('')}</div>
+    ${resourceControllerPanel(node)}
     <div class="row">
       ${field('On failure', `<select data-field="failure_policy">${options(['stop', 'continue', 'retry'], node.failure_policy)}</select>`)}
       ${node.failure_policy === 'retry' ? field('Retries', `<input type="number" min="1" data-field="retry_count" value="${esc(node.retry_count)}">`) : ''}

@@ -2,7 +2,7 @@
 import { state, esc, uid, uniqueName, categoryColor } from './state.js';
 
 const INPUT_PRESETS = [
-  { label: 'Protein sequence', name: 'protein', artifact: { type: 'sequence.protein', format: 'inline', value: 'MKTAYIAKQR' } },
+  { label: 'Protein sequences', name: 'proteins', artifact: { type: 'sequence.protein', format: 'fasta', value: '>A\nMKTAYIAKQR\n>B\nACDEFGHIKL' } },
   { label: 'Ligand library', name: 'ligands', artifact: { type: 'molecule.collection', format: 'smiles', value: ['CCO ethanol'] } },
   { label: 'Structure file', name: 'structure', artifact: { type: 'structure.protein', format: 'pdb', source: 'data/receptor.pdb' } },
   { label: 'Binding-site box', name: 'site', artifact: { type: 'binding_site', format: 'box', value: { center: [0, 0, 0], size: [20, 20, 20] } } },

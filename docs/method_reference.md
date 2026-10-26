@@ -32,6 +32,7 @@ outside `A-Za-z0-9_.-` replaced by `_`), and every score table is keyed by
 | `similarity_search` | `SimilaritySearch` | No | Fingerprint similarity search |
 | `ligand_prep` | `LigandPreparation` | No | 3D conformer generation, protonation |
 | `protein_prep` | `ProteinPreparation` | No | Receptor preparation, PDBQT conversion |
+| `colabfold_msa` | `ColabFoldMSA` | No | Generate chain-specific protein MSAs through the ColabFold MSA Server |
 | `vina_docking` | `VinaDocking` | Yes | AutoDock Vina docking |
 | `smina_docking` | `SminaDocking` | Yes | Smina docking with custom scoring |
 | `boltz2` | `Boltz2Prediction` | No | Boltz-2 structure and affinity prediction |
@@ -40,8 +41,9 @@ outside `A-Za-z0-9_.-` replaced by `_`), and every score table is keyed by
 | `drug_lamp` | `DrugLAMP` | No | Drug-target interaction probabilities |
 | `nesso` | `NessoPrediction` | No | Nesso-1 binding affinity and optional pair representations |
 
-See the [AF3, DrugLAMP, and Nesso guide](predictors.md) for their input checks,
-dependencies, configuration, validated output contracts, and example pipelines.
+See the [predictors guide](predictors.md) for AF3, DrugLAMP, Nesso, and
+ColabFold MSA input checks, dependencies, configuration, validated output
+contracts, and example pipelines.
 
 Every method runs on SLURM through `python -m rapier.methods.runner` (see
 [Running on SLURM](method_development_guide.md#running-on-slurm)). Vina and Boltz2
@@ -381,6 +383,49 @@ coordinates alongside the preparation log's `steps` and `warnings` lists.
 
 ---
 
+## colabfold_msa
+
+Generate one unpaired A3M alignment per protein chain through the public
+[ColabFold MSA Server](https://github.com/sokrypton/ColabFold). The method
+submits all unique protein sequences in one ticket, polls the ticket, validates
+the returned A3M records against each query sequence, and emits the chain
+specific alignments. The output can be shared by multiple downstream
+predictors.
+
+- **Inputs**:
+  - `proteins`: `sequence.protein`, `inline` or `fasta` (many). A single
+    artifact may contain multiple FASTA records.
+- **Outputs**:
+  - `msa`: one `file/a3m` artifact per protein chain. Each artifact contains
+    `chain_id`, normalized `sequence`, and the source record metadata needed to
+    match it to AF3 or Boltz-2.
+  - `run_summary`: `report/json` with the ticket, server, query count, and
+    chain-to-query mapping.
+- **Environment**: Python standard library only; the execution host needs
+  network access to the configured server.
+- **Resources (default)**: 1 CPU, 2 GB memory, 1 hour on the CPU partition.
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `msa_server_url` | `https://api.colabfold.com` | ColabFold MSA API base URL |
+| `use_env` | `true` | Include environmental sequence databases |
+| `use_filter` | `true` | Apply the server's MSA filtering |
+| `request_timeout` | `30` | Timeout in seconds for one HTTP request |
+| `poll_interval` | `5` | Seconds between ticket status checks |
+| `timeout` | `1800` | Overall ticket timeout in seconds |
+| `max_retries` | `5` | Retries for transient HTTP or queue errors |
+
+Protein chain IDs come from explicit uppercase `chain_id`/`chain_ids` metadata,
+then the first token from each FASTA header, then deterministic uppercase IDs
+for bare sequences. Supplied MSA artifacts match those IDs through their
+`chain_id` metadata, an A3M query header, an original filename stem, or the
+unambiguous single-chain fallback. Downstream AF3 and Boltz-2 require complete
+MSA coverage for the supplied protein chains.
+
+---
+
 ## vina_docking
 
 Molecular docking with [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina)
@@ -499,14 +544,17 @@ and normalizes the predicted structures and confidence/affinity JSON files.
     or `ccd` (many). SDF ligands need RDKit. CCD ligands can also be supplied
     with artifact metadata `ccd`.
   - `templates`: `structure`, `pdb` or `cif` (many)
-  - `msas`: `file`, `a3m` or `csv` (many), matched by `chain_id`
+  - `msa`: `file`, `a3m` or `csv` artifacts (many), matched to every protein
+    chain by canonical chain metadata and normalized query sequence
   - `constraints`: one `file/json` artifact containing a list of Boltz `bond`,
     `pocket`, or `contact` entries (or `{constraints: [...]}`); it replaces the
     `constraints` config field
 
   Entity IDs are read from artifact metadata `chain_id`. Use `chain_ids` for a
   single sequence that represents multiple identical chains. Polymer metadata
-  may also contain Boltz `modifications`, `cyclic`, and `msa` fields.
+  may also contain Boltz `modifications` and `cyclic` fields. When `msa` is
+  supplied, its set must cover every protein chain; the supplied files are
+  authoritative and disable Boltz's MSA server and explicit template files.
 - **Outputs**:
   - `predicted_structures`: one `structure.complex` (`cif` or `pdb`) artifact
     per diffusion sample
@@ -538,7 +586,7 @@ are not passed.
 | `accelerator` | `gpu` | `gpu`, `cpu`, or `tpu` |
 | `devices` | 1 | Number of devices |
 | `cache` / `checkpoint` | unset | Boltz cache directory / model checkpoint |
-| `use_msa_server` | `true` | Generate MSA through the configured server |
+| `use_msa_server` | `true` | Generate MSA through the configured server when `msa` is not supplied |
 | `msa_server_url` | `https://api.colabfold.com` | MSA server (used with `use_msa_server`) |
 | `msa_pairing_strategy` | `greedy` | `greedy` or `complete` |
 | `single_sequence_mode` | `false` | Use `msa: empty` when no MSA is available |
@@ -570,7 +618,7 @@ are not passed.
 
 ```yaml
 inputs:
-  protein:
+  proteins:
     type: sequence.protein
     format: inline
     value: MKTAYIAKQRQISFVKSHFSRQ
@@ -587,7 +635,7 @@ methods:
   - id: predict
     type: boltz2
     inputs:
-      proteins: pipeline.protein
+      proteins: pipeline.proteins
       ligands: pipeline.ligand
     config:
       accelerator: gpu

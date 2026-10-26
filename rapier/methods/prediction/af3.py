@@ -1,12 +1,14 @@
 """AlphaFold 3 structure prediction with independent ligand screening."""
 
 import csv
+import copy
 import math
 import re
 from pathlib import Path
 
 from ...core.specs import ConfigField, EnvironmentSpec, PortSpec, ResourceSpec
 from ...data import ComplexStructure, File, ProteinSequence, Report
+from ..msa import chain_id, protein_records, read_text, resolve_msas
 from ._external import (
     COMMON_CONFIG,
     COMMON_OUTPUTS,
@@ -17,7 +19,51 @@ from ._external import (
     native_case,
     number,
     read_json,
+    ligand_inventory,
 )
+
+
+def _protein_records(document):
+    return [
+        {"chain_id": chain, "sequence": entity["protein"]["sequence"].upper()}
+        for entity in document["sequences"]
+        if "protein" in entity
+        for chain in (
+            entity["protein"]["id"]
+            if isinstance(entity["protein"]["id"], list)
+            else [entity["protein"]["id"]]
+        )
+    ]
+
+
+def _apply_options(document, msas, use_templates):
+    """Apply authoritative MSAs before inspecting old paths or templates."""
+    document = copy.deepcopy(document)
+    entities = []
+    for entity in document.get("sequences", []):
+        if "protein" not in entity:
+            entities.append(entity)
+            continue
+        protein = entity["protein"]
+        if not use_templates or msas:
+            protein["templates"] = []
+        if msas:
+            ids = protein["id"] if isinstance(protein["id"], list) else [protein["id"]]
+            for chain in ids:
+                payload = dict(
+                    protein,
+                    id=chain,
+                    unpairedMsa=msas[chain],
+                    pairedMsa="",
+                    templates=[],
+                )
+                payload.pop("unpairedMsaPath", None)
+                payload.pop("pairedMsaPath", None)
+                entities.append({"protein": payload})
+        else:
+            entities.append(entity)
+    document["sequences"] = entities
+    return document
 
 
 def _chain_ids(document):
@@ -223,8 +269,9 @@ class AF3Prediction(ExternalPrediction):
     category = "prediction"
     version = "3.0.1"
     inputs = {
-        **SCREENING_INPUTS,
-        "protein": PortSpec(ProteinSequence, ("inline", "fasta"), required=False),
+        "proteins": PortSpec(
+            ProteinSequence, ("inline", "fasta"), required=False, cardinality="many"
+        ),
         "ligands": PortSpec(
             SCREENING_INPUTS["ligands"].types,
             ("smiles", "sdf"),
@@ -232,6 +279,7 @@ class AF3Prediction(ExternalPrediction):
             cardinality="many",
         ),
         "af3_input": PortSpec(File, "json", required=False),
+        "msa": PortSpec(File, "a3m", required=False, cardinality="many"),
     }
     outputs = {
         **COMMON_OUTPUTS,
@@ -270,6 +318,7 @@ class AF3Prediction(ExternalPrediction):
         "model_seeds": ConfigField(list, default=[1]),
         "num_diffusion_samples": ConfigField(int, default=5, minimum=1),
         "run_data_pipeline": ConfigField(bool, default=True),
+        "use_templates": ConfigField(bool, default=True),
     }
     score_directions = {"ranking_score": "higher", "ptm": "higher", "iptm": "higher"}
 
@@ -287,16 +336,37 @@ class AF3Prediction(ExternalPrediction):
         bound = set(bound_ports)
         if "af3_input" in bound:
             return (
-                ["af3_input is mutually exclusive with protein and ligands"]
-                if bound & {"protein", "ligands"}
+                ["af3_input is mutually exclusive with proteins and ligands"]
+                if bound & {"proteins", "ligands"}
                 else []
             )
-        return super().validate_bindings(bound)
+        return [
+            f"{port} input is required"
+            for port in ("proteins", "ligands")
+            if port not in bound
+        ]
 
     def _native(self, inputs):
         artifact = inputs["af3_input"]
         source = Path(artifact.metadata.get("staged_from", artifact.path)).resolve()
-        return read_json(source), source
+        document = read_json(source)
+        # Check the entity inventory before splitting shared protein IDs.
+        _chain_ids(document)
+        msas = self._msa_texts(inputs, _protein_records(document))
+        return _apply_options(document, msas, self.config["use_templates"]), source
+
+    def _msa_texts(self, inputs, records):
+        if not inputs.get("msa"):
+            return {}
+        if not records:
+            raise ValueError("MSA input requires at least one protein chain")
+        return {
+            chain: read_text(artifact)
+            for chain, artifact in resolve_msas(inputs["msa"], records).items()
+        }
+
+    def _protein_input(self, inputs):
+        return protein_records(inputs["proteins"]) if inputs.get("proteins") else None
 
     def _inventory(self, inputs):
         if inputs.get("af3_input"):
@@ -308,14 +378,68 @@ class AF3Prediction(ExternalPrediction):
         return super()._inventory(inputs)
 
     def check_inputs(self, inputs):
-        if not inputs.get("af3_input"):
-            return super().check_inputs(inputs)
         try:
-            document, source = self._native(inputs)
-            _check_document(document, source.parent, self.config["run_data_pipeline"])
+            if inputs.get("af3_input"):
+                document, source = self._native(inputs)
+                _check_document(
+                    document, source.parent, self.config["run_data_pipeline"]
+                )
+            else:
+                records = protein_records(inputs.get("proteins"))
+                self._msa_texts(inputs, records)
         except Exception as exc:
-            return [f"af3_input: {exc}"]
-        return []
+            return [f"AF3 input: {exc}"]
+        if inputs.get("af3_input"):
+            return []
+        cases, errors = ligand_inventory(inputs)
+        bad = [
+            f"ligand {case['id']}: {case['error']}"
+            for case in cases
+            if case.get("error")
+        ]
+        if (
+            not self.config["allow_partial_failures"]
+            or cases
+            and len(bad) == len(cases)
+        ):
+            errors.extend(bad)
+        return errors
+
+    def _searches(self, inputs):
+        if not self.config["run_data_pipeline"]:
+            return set()
+        if inputs.get("af3_input"):
+            document, _ = self._native(inputs)
+        else:
+            protein = {}
+            if inputs.get("msa"):
+                protein.update(unpairedMsa="", pairedMsa="", templates=[])
+            elif not self.config["use_templates"]:
+                protein["templates"] = []
+            document = {"sequences": [{"protein": protein}]}
+        searches = set()
+        for entity in document["sequences"]:
+            if "protein" in entity:
+                protein = entity["protein"]
+                protein_msa_missing = any(
+                    protein.get(key) is None and protein.get(key + "Path") is None
+                    for key in ("unpairedMsa", "pairedMsa")
+                )
+                if protein_msa_missing:
+                    searches.add("protein")
+                if protein.get("templates") is None:
+                    searches.add("templates")
+                    # Existing explicit MSAs can seed template search directly;
+                    # only run the sequence search when those MSAs are absent.
+                    if protein_msa_missing:
+                        searches.add("protein")
+            elif (
+                "rna" in entity
+                and entity["rna"].get("unpairedMsa") is None
+                and entity["rna"].get("unpairedMsaPath") is None
+            ):
+                searches.add("rna")
+        return searches
 
     def _required_paths(self, inputs):
         paths = [
@@ -327,11 +451,7 @@ class AF3Prediction(ExternalPrediction):
             ("AF3 weights", expanded(self.config["model_dir"]) / "af3.bin", False),
         ]
         if self.config["run_data_pipeline"]:
-            kinds = (
-                {next(iter(entity)) for entity in self._native(inputs)[0]["sequences"]}
-                if inputs.get("af3_input")
-                else {"protein", "ligand"}
-            )
+            kinds = self._searches(inputs)
             names = []
             if "protein" in kinds:
                 names += [
@@ -339,9 +459,9 @@ class AF3Prediction(ExternalPrediction):
                     "mgy_clusters_2022_05.fa",
                     "uniprot_all_2021_04.fa",
                     "uniref90_2022_05.fa",
-                    "pdb_seqres_2022_09_28.fasta",
-                    "mmcif_files",
                 ]
+            if "templates" in kinds:
+                names += ["pdb_seqres_2022_09_28.fasta", "mmcif_files"]
             if "rna" in kinds:
                 names += [
                     "nt_rna_2023_02_23_clust_seq_id_90_cov_80_rep_seq.fasta",
@@ -360,17 +480,20 @@ class AF3Prediction(ExternalPrediction):
 
     def check_dependencies(self, inputs, ctx):
         errors = super().check_dependencies(inputs, ctx)
-        if self.config["run_data_pipeline"]:
+        searches = self._searches(inputs)
+        if searches:
             request = {
                 "action": "probe",
                 "modules": [],
-                "executables": [
-                    "jackhmmer",
-                    "nhmmer",
-                    "hmmalign",
-                    "hmmsearch",
-                    "hmmbuild",
-                ],
+                "executables": sorted(
+                    ({"jackhmmer"} if "protein" in searches else set())
+                    | ({"nhmmer", "hmmalign"} if "rna" in searches else set())
+                    | (
+                        {"hmmsearch", "hmmbuild", "hmmalign"}
+                        if "templates" in searches
+                        else set()
+                    )
+                ),
                 "gpu": False,
             }
             try:
@@ -383,7 +506,12 @@ class AF3Prediction(ExternalPrediction):
                     {
                         "action": "af3_input",
                         "source": str(self._native(inputs)[1]),
-                        "run_data_pipeline": self.config["run_data_pipeline"],
+                        "run_data_pipeline": bool(searches),
+                        "msa": self._msa_texts(
+                            inputs, _protein_records(self._native(inputs)[0])
+                        ),
+                        "use_templates": self.config["use_templates"]
+                        and not bool(inputs.get("msa")),
                     },
                     ctx.work_dir,
                 )
@@ -402,29 +530,53 @@ class AF3Prediction(ExternalPrediction):
         self._native_source = (
             str(self._native(inputs)[1]) if inputs.get("af3_input") else None
         )
+        records = (
+            _protein_records(self._native(inputs)[0])
+            if self._native_source
+            else self._protein_input(inputs)
+        )
+        self._supplied_msas = self._msa_texts(inputs, records)
+        self._run_data_pipeline = bool(self._searches(inputs))
         return super().run(inputs, ctx)
 
     def _predict_case(self, case, directory, protein):
         request = {
             "action": "af3_input",
-            "run_data_pipeline": self.config["run_data_pipeline"],
+            "run_data_pipeline": self._run_data_pipeline,
             "destination": str(directory / "input.json"),
+            "msa": self._supplied_msas,
+            "use_templates": self.config["use_templates"]
+            and not bool(self._supplied_msas),
         }
         if self._native_source:
             request["source"] = self._native_source
         else:
-            chain = {"id": "A", "sequence": protein}
-            if not self.config["run_data_pipeline"]:
-                chain.update(unpairedMsa="", pairedMsa="", templates=[])
+            sequences = []
+            for record in protein:
+                chain = {"id": record["chain_id"], "sequence": record["sequence"]}
+                if not self.config["run_data_pipeline"]:
+                    chain.update(unpairedMsa="", pairedMsa="", templates=[])
+                elif not request["use_templates"]:
+                    chain["templates"] = []
+                sequences.append({"protein": chain})
+            used = {record["chain_id"] for record in protein}
+            ligand_index = 0
+            while chain_id(ligand_index) in used:
+                ligand_index += 1
+            sequences.append(
+                {
+                    "ligand": {
+                        "id": chain_id(ligand_index),
+                        "smiles": case["prepared_smiles"],
+                    }
+                }
+            )
             request["document"] = {
                 "dialect": "alphafold3",
                 "version": 4,
                 "name": case["case_id"],
                 "modelSeeds": self.config["model_seeds"],
-                "sequences": [
-                    {"protein": chain},
-                    {"ligand": {"id": "B", "smiles": case["prepared_smiles"]}},
-                ],
+                "sequences": sequences,
             }
         self._worker(request, directory)
         self._command(
@@ -440,7 +592,7 @@ class AF3Prediction(ExternalPrediction):
                 str(expanded(self.config["model_dir"])),
                 "--db_dir",
                 str(expanded(self.config["db_dir"])),
-                f"--run_data_pipeline={str(self.config['run_data_pipeline']).lower()}",
+                f"--run_data_pipeline={str(self._run_data_pipeline).lower()}",
                 "--num_diffusion_samples",
                 str(self.config["num_diffusion_samples"]),
             ],
@@ -454,9 +606,17 @@ class AF3Prediction(ExternalPrediction):
         if protein is not None:
             if (
                 document["modelSeeds"] != self.config["model_seeds"]
-                or document["sequences"][0]["protein"]["sequence"] != protein
-                or document["sequences"][1]["ligand"]["smiles"]
-                != case["prepared_smiles"]
+                or _protein_records(document)
+                != [
+                    {"chain_id": record["chain_id"], "sequence": record["sequence"]}
+                    for record in protein
+                ]
+                or [
+                    entity["ligand"]["smiles"]
+                    for entity in document["sequences"]
+                    if "ligand" in entity
+                ]
+                != [case["prepared_smiles"]]
             ):
                 raise ValueError("AF3 staged input does not match the requested pair")
         elif getattr(self, "_native_source", None):

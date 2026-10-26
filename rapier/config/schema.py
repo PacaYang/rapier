@@ -14,50 +14,49 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "required": ["name", "methods"],
     "properties": {
-        "name": {
-            "type": "string",
-            "description": "Pipeline name",
-            "minLength": 1
-        },
-        "description": {
-            "type": "string",
-            "description": "Pipeline description"
-        },
+        "name": {"type": "string", "description": "Pipeline name", "minLength": 1},
+        "description": {"type": "string", "description": "Pipeline description"},
         "version": {
             "type": "string",
             "description": "Configuration version",
-            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
         },
+        "metadata_file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Companion YAML file defining the working directory and compute region",
+        },
+        "metadata": {"$ref": "#/definitions/workflow_metadata"},
         "methods": {
             "type": "array",
             "description": "List of methods in the pipeline",
             "minItems": 1,
-            "items": {"$ref": "#/definitions/method"}
+            "items": {"$ref": "#/definitions/method"},
         },
         "inputs": {
             "type": "object",
             "description": "Reusable normalized pipeline artifacts",
-            "additionalProperties": {"$ref": "#/definitions/artifact"}
+            "additionalProperties": {"$ref": "#/definitions/artifact"},
         },
         "outputs": {
             "type": "object",
             "description": "Exported method output references",
-            "additionalProperties": {"type": "string"}
+            "additionalProperties": {"type": "string"},
         },
         "connections": {
             "type": "array",
             "description": "Connections between methods",
-            "items": {"$ref": "#/definitions/connection"}
+            "items": {"$ref": "#/definitions/connection"},
         },
         "pooling_rules": {
             "type": "object",
             "description": "Rules for pooling results from parallel branches",
-            "additionalProperties": {"$ref": "#/definitions/pooling_rule"}
+            "additionalProperties": {"$ref": "#/definitions/pooling_rule"},
         },
         "failure_policy": {
             "type": "string",
             "description": "Global failure handling policy",
-            "enum": ["stop", "continue", "retry"]
+            "enum": ["stop", "continue", "retry"],
         },
         "environment": {
             "type": "object",
@@ -65,15 +64,25 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
             "properties": {
                 "variables": {
                     "type": "object",
-                    "additionalProperties": {"type": "string"}
+                    "additionalProperties": {"type": "string"},
                 },
-                "project_dir": {
-                    "type": "string"
-                }
-            }
-        }
+                "project_dir": {"type": "string"},
+            },
+        },
     },
     "definitions": {
+        "workflow_metadata": {
+            "type": "object",
+            "required": ["working_dir", "region"],
+            "properties": {
+                "working_dir": {"type": "string", "minLength": 1},
+                "region": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Compute location, such as a cloud region or cluster name",
+                },
+            },
+        },
         "method": {
             "type": "object",
             "required": ["id", "type"],
@@ -81,46 +90,43 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
                 "id": {
                     "type": "string",
                     "description": "Unique method identifier",
-                    "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$"
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
                 },
                 "type": {
                     "type": "string",
-                    "description": "Method type (e.g., 'vina_dock', 'filtering')"
+                    "description": "Method type (e.g., 'vina_dock', 'filtering')",
                 },
-                "description": {
-                    "type": "string",
-                    "description": "Method description"
-                },
+                "description": {"type": "string", "description": "Method description"},
                 "parameters": {
                     "type": "object",
                     "description": "Deprecated alias for method config",
-                    "additionalProperties": True
+                    "additionalProperties": True,
                 },
                 "config": {
                     "type": "object",
                     "description": "Strict method-specific configuration",
-                    "additionalProperties": True
+                    "additionalProperties": True,
                 },
                 "inputs": {
                     "type": "object",
                     "description": "Named artifact port references",
-                    "additionalProperties": {"type": "string"}
+                    "additionalProperties": {"type": "string"},
                 },
-                "resources": {
-                    "$ref": "#/definitions/resources"
-                },
+                "resources": {"$ref": "#/definitions/resources"},
+                "resource_controller": {"$ref": "#/definitions/resources"},
                 "failure_policy": {
                     "type": "string",
                     "enum": ["stop", "continue", "retry"],
-                    "description": "Failure policy for this method"
+                    "description": "Failure policy for this method",
                 },
                 "retry_count": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 10,
-                    "description": "Number of retries if failure_policy is 'retry'"
-                }
-            }
+                    "description": "Number of retries if failure_policy is 'retry'",
+                },
+            },
+            "not": {"required": ["resources", "resource_controller"]},
         },
         "artifact": {
             "type": "object",
@@ -130,12 +136,12 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
                 "format": {"type": "string", "minLength": 1},
                 "source": {"type": "string", "minLength": 1},
                 "value": {},
-                "metadata": {"type": "object"}
+                "metadata": {"type": "object"},
             },
             "oneOf": [
                 {"required": ["source"], "not": {"required": ["value"]}},
-                {"required": ["value"], "not": {"required": ["source"]}}
-            ]
+                {"required": ["value"], "not": {"required": ["source"]}},
+            ],
         },
         "connection": {
             "type": "object",
@@ -144,21 +150,18 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
                 "from": {
                     "oneOf": [
                         {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
+                        {"type": "array", "items": {"type": "string"}},
                     ],
-                    "description": "Source method ID(s)"
+                    "description": "Source method ID(s)",
                 },
-                "to": {
-                    "type": "string",
-                    "description": "Target method ID"
-                },
+                "to": {"type": "string", "description": "Target method ID"},
                 "type": {
                     "type": "string",
                     "enum": ["serial", "parallel"],
                     "default": "serial",
-                    "description": "Connection type"
-                }
-            }
+                    "description": "Connection type",
+                },
+            },
         },
         "pooling_rule": {
             "type": "object",
@@ -166,22 +169,22 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
             "properties": {
                 "strategy": {
                     "type": "string",
-                    "description": "Pooling strategy: 'any', 'all', 'majority', 'best', 'first', 'custom'"
+                    "description": "Pooling strategy: 'any', 'all', 'majority', 'best', 'first', 'custom'",
                 },
                 "metric": {
                     "type": "string",
-                    "description": "Metric to use for 'best' strategy"
+                    "description": "Metric to use for 'best' strategy",
                 },
                 "minimize": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Whether to minimize the metric (default: maximize)"
+                    "description": "Whether to minimize the metric (default: maximize)",
                 },
                 "function": {
                     "type": "string",
-                    "description": "Custom pooling function for 'custom' strategy"
-                }
-            }
+                    "description": "Custom pooling function for 'custom' strategy",
+                },
+            },
         },
         "resources": {
             "type": "object",
@@ -189,30 +192,33 @@ PIPELINE_SCHEMA: Dict[str, Any] = {
                 "cpus": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Number of CPUs"
+                    "description": "Number of CPUs",
                 },
                 "memory": {
                     "type": "string",
-                    "pattern": "^[0-9]+(MB|GB|TB)$",
-                    "description": "Memory requirement (e.g., '4GB')"
+                    "pattern": "^[0-9]+(\\.[0-9]+)?(KB|MB|GB|TB)$",
+                    "description": "Memory requirement (e.g., '4GB')",
                 },
                 "gpus": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Number of GPUs"
+                    "description": "Number of GPUs",
                 },
                 "time_limit": {
                     "type": "string",
-                    "pattern": "^[0-9]+(s|m|h|d)$",
-                    "description": "Time limit (e.g., '1h', '30m')"
+                    "pattern": "^([0-9]+(s|m|h|d)|([0-9]+-)?([0-9]+:)?[0-9]+:[0-9]+)$",
+                    "description": "Time limit (e.g., '1h', '30m')",
                 },
-                "partition": {
-                    "type": "string",
-                    "description": "SLURM partition name"
-                }
-            }
-        }
-    }
+                "partition": {"type": "string", "description": "SLURM partition name"},
+                "nodes": {"type": "integer", "minimum": 1},
+                "gpu_type": {"type": "string", "minLength": 1},
+                "account": {"type": "string", "minLength": 1},
+                "qos": {"type": "string", "minLength": 1},
+                "constraint": {"type": "string", "minLength": 1},
+                "exclusive": {"type": "boolean"},
+            },
+        },
+    },
 }
 
 
@@ -227,12 +233,12 @@ def validate_pooling_strategy(strategy: str, metric: str = None) -> bool:
     Returns:
         True if valid, False otherwise
     """
-    valid_strategies = {'any', 'all', 'majority', 'best', 'first', 'custom'}
+    valid_strategies = {"any", "all", "majority", "best", "first", "custom"}
 
     if strategy not in valid_strategies:
         return False
 
-    if strategy == 'best' and not metric:
+    if strategy == "best" and not metric:
         return False
 
     return True
@@ -248,7 +254,7 @@ def validate_failure_policy(policy: str) -> bool:
     Returns:
         True if valid, False otherwise
     """
-    valid_policies = {'stop', 'continue', 'retry'}
+    valid_policies = {"stop", "continue", "retry"}
     return policy in valid_policies
 
 
@@ -262,23 +268,6 @@ def validate_resource_spec(resources: Dict[str, Any]) -> bool:
     Returns:
         True if valid, False otherwise
     """
-    if not resources:
-        return True
+    from rapier.core.resources import ResourceController
 
-    # Validate memory format
-    if 'memory' in resources:
-        memory = resources['memory']
-        if not isinstance(memory, str):
-            return False
-        if not any(memory.endswith(unit) for unit in ['MB', 'GB', 'TB']):
-            return False
-
-    # Validate time limit format
-    if 'time_limit' in resources:
-        time_limit = resources['time_limit']
-        if not isinstance(time_limit, str):
-            return False
-        if not any(time_limit.endswith(unit) for unit in ['s', 'm', 'h', 'd']):
-            return False
-
-    return True
+    return not ResourceController.validation_errors(resources)

@@ -1,24 +1,32 @@
-# AF3, DrugLAMP, and Nesso
+# AF3, DrugLAMP, Nesso, and ColabFold MSA
 
 The registered methods `af3`, `drug_lamp`, and `nesso` run the installed
-applications in their own conda environments. Import the classes with:
+applications in their own conda environments. `colabfold_msa` uses the
+standard-library HTTP client to call a ColabFold-compatible server. Import the
+classes with:
 
 ```python
-from rapier.methods import AF3Prediction, DrugLAMP, NessoPrediction
+from rapier.methods import AF3Prediction, DrugLAMP, NessoPrediction, ColabFoldMSA
 ```
 
-Each method screens every ligand independently against one target. The
-`protein` input accepts an inline sequence or a FASTA file containing exactly
-one nonempty sequence. The `ligands` input accepts individual molecules,
+AF3 accepts one or more protein chains through its `proteins` input. The
+optional `msa` input accepts one A3M artifact per chain; when it is supplied,
+AF3 uses the supplied alignments and disables its MSA and template searches.
+Without `msa`, AF3 follows its configured data-pipeline behavior. The
+`ligands` input accepts individual molecules,
 collections, or lists of SMILES/SDF artifacts. IDs come from SMILES names or
 SDF titles; repeated IDs have distinct, one-based `input_occurrence` values
 across all bound ligand artifacts. Score tables preserve both keys.
+
+DrugLAMP and Nesso retain their single-target `protein` input and do not
+consume MSA artifacts.
 
 See the runnable pipeline examples:
 
 - [AF3](../examples/pipelines/09_af3_prediction.yaml)
 - [DrugLAMP](../examples/pipelines/10_drug_lamp_prediction.yaml)
 - [Nesso](../examples/pipelines/11_nesso_prediction.yaml)
+- [ColabFold MSA shared by AF3 and Boltz-2](../examples/pipelines/12_colabfold_msa.yaml)
 
 ## Validation lifecycle
 
@@ -75,11 +83,12 @@ check ESM assets before invoking applications.
 
 Common configuration: `conda_env`, `application_dir`, `model_dir`, `db_dir`,
 `model_seeds` (default `[1]`), `num_diffusion_samples` (default `5`),
-`run_data_pipeline` (default `true`), and `allow_partial_failures`.
+`run_data_pipeline` (default `true`), `use_templates` (default `true`), and
+`allow_partial_failures`.
 Default resources: 8 CPUs, 64 GB memory, one GPU, 24 hours.
 
 Alternatively, bind one native AF3 job JSON to `af3_input`, omitting both
-`protein` and `ligands`. Official `alphafold3` dialect versions 1–4 are
+`proteins` and `ligands`. Official `alphafold3` dialect versions 1–4 are
 accepted by the installed parser. Native jobs retain their seeds, chain
 definitions, bonds, modifications, DNA/RNA, MSAs, and templates. File
 references resolve relative to the original JSON, and the application worker
@@ -88,7 +97,17 @@ writes a self-contained staged job before prediction.
 With `run_data_pipeline: false`, native protein inputs must explicitly supply
 paired/unpaired MSAs and templates; empty strings/lists are allowed. Native
 RNA requires an explicit unpaired MSA. Typed protein/ligand inputs in this
-mode generate empty MSAs/templates for single-sequence inference.
+mode generate empty MSAs/templates for single-sequence inference. A supplied
+`msa` set is authoritative for typed or native jobs, must cover every protein
+chain, and disables both MSA and template search.
+
+Protein records use explicit uppercase `chain_id`/`chain_ids` metadata first,
+then the first token from each FASTA header, then deterministic uppercase IDs
+for bare sequences. Supplied MSA artifacts match those resolved chains through
+their `chain_id` metadata, an A3M query header, an original filename stem, or
+the unambiguous single-chain fallback. IDs must be unique uppercase letter
+strings so they are valid AF3 and Boltz chain identifiers. A multi-record FASTA
+artifact and a list of sequence artifacts are both supported.
 
 | Output | Contract |
 |---|---|
@@ -157,6 +176,7 @@ predicted PDB/mmCIF coordinates.
 python scripts/validate_config.py examples/pipelines/09_af3_prediction.yaml --build
 python scripts/validate_config.py examples/pipelines/10_drug_lamp_prediction.yaml --build
 python scripts/validate_config.py examples/pipelines/11_nesso_prediction.yaml --build
+python scripts/validate_config.py examples/pipelines/12_colabfold_msa.yaml --build
 python -m pytest tests/methods/test_external_predictions.py
 ```
 

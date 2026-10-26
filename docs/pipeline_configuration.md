@@ -13,6 +13,7 @@ name: my_pipeline            # required
 description: ...             # optional
 version: 1.0.0               # optional
 failure_policy: stop         # optional: stop | continue | retry (default: stop)
+metadata_file: screening.meta.yaml  # optional companion workflow metadata
 
 inputs: {...}                # optional: named pipeline artifacts
 methods: [...]               # required, at least one
@@ -24,11 +25,17 @@ include: [...]               # optional: other YAML files to merge in
 ui: {...}                    # optional: workflow-builder canvas state
 ```
 
+When `metadata_file` is present, the companion YAML file must define the
+workflow `working_dir` and its compute `region` or cluster identifier. See the
+[workflow metadata guide](workflow_metadata.md) for the companion-file format
+and the output-directory placeholder.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Pipeline name (non-empty). Also names the execution state file |
 | `description` | string | no | Human-readable description |
 | `version` | string | no | Free-form, conventionally `X.Y.Z`. Stored in `pipeline.metadata`; methods report their own class `version` |
+| `metadata_file` | string | no | Companion YAML file defining the workflow working directory and compute region or cluster |
 | `failure_policy` | enum | no | `stop`, `continue`, or `retry`. See [Failure policies](#failure-policies) |
 | `inputs` | map | no | Named artifacts, referenced as `pipeline.<name>` |
 | `methods` | list | yes | Method definitions (at least one) |
@@ -71,7 +78,7 @@ inputs:
 | `format` | yes | Representation. Must be valid for the type |
 | `source` | one of | Local file path. Relative paths resolve against the project dir (the YAML file's directory) |
 | `value` | one of | Inline JSON-safe payload |
-| `metadata` | no | Free-form map passed along with the artifact (e.g. `chain_id` for Boltz-2) |
+| `metadata` | no | Free-form map passed along with the artifact (for example `chain_id` or `chain_ids` for protein chains) |
 
 Set exactly one of `source` and `value`. `source` files must exist when the
 pipeline is validated.
@@ -102,6 +109,40 @@ A subtype satisfies a port that asks for its parent. For example,
 `molecule.collection` port, and `table.scores` a `table` port. `molecule` and
 `molecule.collection` are separate types. Each type is a data class in
 `rapier.data`.
+
+### Protein sequences and MSAs
+
+`colabfold_msa` accepts one or more protein sequence artifacts through its
+`proteins` port and emits one `msa` A3M artifact per resolved chain. Bind that
+output to the optional `msa` port on `af3` or `boltz2` when the same alignment
+should be reused by both predictors:
+
+```yaml
+methods:
+  - id: msa
+    type: colabfold_msa
+    inputs:
+      proteins: pipeline.proteins
+  - id: af3
+    type: af3
+    inputs:
+      proteins: pipeline.proteins
+      msa: msa.msa
+      ligands: pipeline.ligands
+  - id: boltz
+    type: boltz2
+    inputs:
+      proteins: pipeline.proteins
+      msa: msa.msa
+      ligands: pipeline.ligands
+```
+
+MSA artifacts retain canonical chain metadata. Protein chain IDs come from
+explicit uppercase `chain_id`/`chain_ids` metadata, followed by FASTA header
+tokens and deterministic IDs for bare sequences. Supplying a complete MSA set
+makes it authoritative: AF3 skips its MSA and template search, while Boltz-2
+skips its MSA server and explicit template files. Without an `msa` binding,
+each predictor uses its configured native MSA behavior.
 
 ### Built-in converters
 
@@ -151,9 +192,9 @@ methods:
 | `failure_policy` | enum | `stop` | `stop`, `continue`, or `retry` |
 | `retry_count` | int | `1` | Retries allowed under `retry` (at least 1) |
 
-Registered types: `ligand_filter`, `ligand_prep`, `protein_prep`,
+Registered types: `ligand_filter`, `ligand_prep`, `protein_prep`, `colabfold_msa`,
 `similarity_search`, `molecule_filter`, `vina_docking`, `smina_docking`,
-`boltz2` (alias `boltz2_prediction`).
+`boltz2` (alias `boltz2_prediction`), `af3`, `drug_lamp`, and `nesso`.
 
 A `type` that isn't registered is accepted as long as the method has no
 `inputs` (its task then runs with no method instance). Several legacy examples

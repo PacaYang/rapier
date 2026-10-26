@@ -6,5 +6,6 @@ virtual screening workflows.
 
 from .ligand_prep import LigandPreparation
 from .protein_prep import ProteinPreparation
+from .colabfold_msa import ColabFoldMSA
 
-__all__ = ['LigandPreparation', 'ProteinPreparation']
+__all__ = ["LigandPreparation", "ProteinPreparation", "ColabFoldMSA"]

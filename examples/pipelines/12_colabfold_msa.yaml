@@ -1,0 +1,76 @@
+# Example 12: Generate ColabFold MSAs and reuse them in AF3 and Boltz-2
+
+name: colabfold_msa_shared
+description: Generate chain-specific MSAs once and reuse them in AlphaFold 3 and Boltz-2
+version: 1.0.0
+
+inputs:
+  proteins:
+    type: sequence.protein
+    format: fasta
+    value: |
+      >A
+      MKTAYIAKQRQISFVKSHFSRQ
+      >B
+      ACDEFGHIKL
+    metadata:
+      chain_ids: [A, B]
+  ligands:
+    type: molecule.collection
+    format: smiles
+    value: [CCO ethanol]
+    metadata:
+      chain_id: C
+
+methods:
+  - id: msa
+    type: colabfold_msa
+    inputs:
+      proteins: pipeline.proteins
+    config:
+      msa_server_url: https://api.colabfold.com
+      use_env: true
+      use_filter: true
+
+  - id: af3
+    type: af3
+    inputs:
+      proteins: pipeline.proteins
+      msa: msa.msa
+      ligands: pipeline.ligands
+    config:
+      conda_env: af3_test
+      model_seeds: [1]
+      num_diffusion_samples: 1
+      run_data_pipeline: false
+      use_templates: false
+      allow_partial_failures: true
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 64GB
+      time_limit: 24h
+
+  - id: boltz
+    type: boltz2
+    inputs:
+      proteins: pipeline.proteins
+      msa: msa.msa
+      ligands: pipeline.ligands
+    config:
+      accelerator: gpu
+      use_msa_server: false
+      affinity_binder: C
+      diffusion_samples: 2
+      output_format: mmcif
+    resources:
+      cpus: 8
+      gpus: 1
+      memory: 32GB
+      time_limit: 12h
+
+outputs:
+  af3_structures: af3.predicted_structures
+  af3_scores: af3.scores
+  boltz_structures: boltz.predicted_structures
+  boltz_scores: boltz.scores

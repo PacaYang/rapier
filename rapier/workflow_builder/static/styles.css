@@ -20,7 +20,7 @@ input, select, textarea {
 }
 textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monospace; font-size: 12px; }
 
-.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .toolbar h1 { font-size: 15px; margin: 0 8px 0 0; white-space: nowrap; }
 .toolbar h1 span { color: var(--muted); font-weight: 400; }
 .toolbar #pipeline-name { width: 240px; }
@@ -84,6 +84,11 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
   background: color-mix(in srgb, var(--cat, #ff8a5c) 22%, var(--panel-2)); border: 1px solid var(--line); }
 .card-head + .card-sub + .chips, .card-sub + .chips { --cat: #ff8a5c; }
 .card-preview { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); padding: 4px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-controller { display: grid; gap: 3px; margin: 7px 9px; padding: 7px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; font-size: 10.5px; }
+.controller-label { font-weight: 600; color: var(--accent); }
+.controller-time, .output-placeholder { color: var(--muted); }
+.output-placeholder { line-height: 1.5; overflow-wrap: anywhere; }
+.output-placeholder code { display: block; }
 .ports { padding: 4px 0 6px; }
 .ports + .ports { border-top: 1px dashed var(--line); }
 .port { position: relative; display: flex; align-items: center; gap: 6px; padding: 3px 12px; min-height: 22px; }
@@ -132,6 +137,8 @@ button.icon { padding: 0; }
 .field.checkbox input { width: auto; }
 .row { display: flex; gap: 6px; }
 .row > * { flex: 1; }
+.row > .field { min-width: 0; }
+.resource-controller { border-top: 1px solid var(--line); margin-top: 14px; }
 .err-list { color: var(--danger); padding-left: 18px; margin: 4px 0; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; }
 .kv dt { color: var(--muted); }
@@ -146,8 +153,23 @@ button.icon { padding: 0; }
 #problems-list li button:hover { color: var(--accent); }
 #problems-list .loc { color: var(--muted); margin-right: 6px; }
 
-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); width: min(760px, 90vw); }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); width: min(1100px, 94vw); max-height: 92vh; overflow-y: auto; }
 dialog::backdrop { background: rgba(0,0,0,.55); }
 dialog h2 { margin-top: 0; font-size: 15px; }
-#export-text { height: 55vh; }
+.export-files { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; }
+.export-files h3 { font-size: 12px; overflow-wrap: anywhere; }
+.export-files textarea { height: 52vh; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+@media (max-width: 850px) {
+  .export-files { grid-template-columns: 1fr; }
+  .export-files textarea { height: 30vh; }
+}
+@media (max-width: 760px) {
+  .toolbar h1 { width: 100%; }
+  .toolbar .spacer { display: none; }
+  .toolbar #pipeline-name { flex: 1 1 170px; min-width: 0; width: auto; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(360px, 1fr) auto; overflow-y: auto; }
+  #palette { max-height: 28vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  #viewport { min-height: 360px; }
+  #inspector { max-height: 42vh; border-left: 0; border-top: 1px solid var(--line); }
+}

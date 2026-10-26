@@ -1,0 +1,36 @@
+# Workflow settings are stored in the companion metadata file.
+# Validate and build without executing methods or submitting jobs:
+#   python scripts/validate_config.py examples/pipelines/13_workflow_metadata.yaml --build
+
+name: workflow_metadata
+description: A Python molecule filter with workflow metadata and one resource controller
+version: 1.0.0
+metadata_file: 13_workflow_metadata.meta.yaml
+
+inputs:
+  molecules:
+    type: molecule.collection
+    format: sdf
+    source: ../../tests/fixtures/sample_data/ligands.sdf
+
+methods:
+  - id: filter
+    type: molecule_filter
+    description: Keep molecules with at least one heavy atom
+    inputs:
+      molecules: pipeline.molecules
+    config:
+      criteria:
+        - column: heavy_atoms
+          op: ">="
+          value: 1
+    # This method receives one controller, including inherited defaults.
+    resource_controller:
+      cpus: 2
+      memory: 2GB
+      time_limit: "00:10:00"
+
+outputs:
+  molecules: filter.filtered_molecules
+  scores: filter.filtered_scores
+  report: filter.report

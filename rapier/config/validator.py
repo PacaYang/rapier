@@ -6,9 +6,9 @@ Validates structure, connections, method references, and circular dependencies.
 
 from typing import List, Tuple, Set, Dict, Any
 from .pipeline_config import PipelineConfig
-from .method_config import MethodConfig
-from .schema import validate_pooling_strategy, validate_failure_policy, validate_resource_spec
+from .schema import validate_pooling_strategy, validate_failure_policy
 from rapier.artifacts import get_artifact_registry, get_converter_registry
+from rapier.core.resources import ResourceController
 
 
 class ConfigValidator:
@@ -132,9 +132,7 @@ class ConfigValidator:
         for method in config.methods:
             # Validate method ID format
             if not method.id or not method.id[0].isalpha():
-                errors.append(
-                    f"Method '{method.id}': ID must start with a letter"
-                )
+                errors.append(f"Method '{method.id}': ID must start with a letter")
 
             # Validate failure policy
             if not validate_failure_policy(method.failure_policy):
@@ -143,19 +141,19 @@ class ConfigValidator:
                 )
 
             # Validate retry count
-            if method.failure_policy == 'retry' and method.retry_count < 1:
-                errors.append(
-                    f"Method '{method.id}': retry_count must be at least 1"
-                )
+            if method.failure_policy == "retry" and method.retry_count < 1:
+                errors.append(f"Method '{method.id}': retry_count must be at least 1")
 
             # Validate resources
-            if method.resources and not validate_resource_spec(method.resources):
-                errors.append(
-                    f"Method '{method.id}': invalid resource specification"
-                )
+            errors.extend(
+                f"Method '{method.id}': {message}"
+                for message in self.validate_resources(method.resource_controller)
+            )
 
             if method.inputs and not method.type:
-                errors.append(f"Method '{method.id}': normalized inputs require a method type")
+                errors.append(
+                    f"Method '{method.id}': normalized inputs require a method type"
+                )
 
         return errors
 
@@ -175,13 +173,15 @@ class ConfigValidator:
         graph: Dict[str, List[str]] = {m.id: [] for m in config.methods}
         for conn in config.connections:
             for from_id in conn.from_methods:
-                if from_id in graph:  # Should always be true after connection validation
+                if (
+                    from_id in graph
+                ):  # Should always be true after connection validation
                     graph[from_id].append(conn.to_method)
         for method in config.methods:
             for reference in method.inputs.values():
-                if reference.startswith('pipeline.'):
+                if reference.startswith("pipeline."):
                     continue
-                source_method, separator, _ = reference.partition('.')
+                source_method, separator, _ = reference.partition(".")
                 if separator and source_method in graph:
                     graph[source_method].append(method.id)
 
@@ -202,9 +202,7 @@ class ConfigValidator:
                     # Found a cycle
                     cycle_start = path.index(neighbor)
                     cycle = path[cycle_start:] + [neighbor]
-                    errors.append(
-                        f"Circular dependency detected: {' -> '.join(cycle)}"
-                    )
+                    errors.append(f"Circular dependency detected: {' -> '.join(cycle)}")
                     return True
 
             rec_stack.remove(node)
@@ -231,7 +229,9 @@ class ConfigValidator:
             try:
                 artifact = artifact_config.to_artifact()
                 valid, artifact_errors = artifact_registry.validate(artifact)
-                errors.extend(f"Pipeline input '{name}': {error}" for error in artifact_errors)
+                errors.extend(
+                    f"Pipeline input '{name}': {error}" for error in artifact_errors
+                )
                 if valid:
                     pipeline_artifacts[name] = artifact
             except (TypeError, ValueError, KeyError) as exc:
@@ -248,14 +248,18 @@ class ConfigValidator:
                 continue
             method_class = method_registry.get(method_config.type)
             try:
-                method = method_class(name=method_config.id, config=method_config.config)
+                method = method_class(
+                    name=method_config.id, config=method_config.config
+                )
                 instances[method_config.id] = method
             except (TypeError, ValueError) as exc:
                 errors.append(f"Method '{method_config.id}' configuration: {exc}")
 
         method_ids = set(config.get_method_ids())
         normalized_pipeline = bool(
-            config.inputs or config.outputs or any(item.inputs for item in config.methods)
+            config.inputs
+            or config.outputs
+            or any(item.inputs for item in config.methods)
         )
         for method_config in config.methods:
             method = instances.get(method_config.id)
@@ -282,8 +286,8 @@ class ConfigValidator:
                     )
                     continue
                 source_artifact = None
-                if reference.startswith('pipeline.'):
-                    input_name = reference[len('pipeline.'):]
+                if reference.startswith("pipeline."):
+                    input_name = reference[len("pipeline.") :]
                     if not input_name or input_name not in config.inputs:
                         errors.append(
                             f"Method '{method_config.id}' input '{port_name}': unknown pipeline "
@@ -292,7 +296,7 @@ class ConfigValidator:
                         continue
                     source_artifact = pipeline_artifacts.get(input_name)
                 else:
-                    source_method, separator, source_port = reference.partition('.')
+                    source_method, separator, source_port = reference.partition(".")
                     if not separator or not source_method or not source_port:
                         errors.append(
                             f"Method '{method_config.id}' input '{port_name}': invalid reference "
@@ -336,9 +340,11 @@ class ConfigValidator:
                         )
 
         for output_name, reference in config.outputs.items():
-            source_method, separator, source_port = reference.partition('.')
+            source_method, separator, source_port = reference.partition(".")
             if not separator or source_method not in method_ids:
-                errors.append(f"Pipeline output '{output_name}': invalid reference '{reference}'")
+                errors.append(
+                    f"Pipeline output '{output_name}': invalid reference '{reference}'"
+                )
                 continue
             source_instance = instances.get(source_method)
             if source_instance and source_port not in source_instance.output_spec.ports:
@@ -363,9 +369,7 @@ class ConfigValidator:
         for method_id, rule in config.pooling_rules.items():
             # Check that method exists
             if not config.has_method(method_id):
-                errors.append(
-                    f"Pooling rule for non-existent method: '{method_id}'"
-                )
+                errors.append(f"Pooling rule for non-existent method: '{method_id}'")
                 continue
 
             # Check that method has multiple upstream connections
@@ -394,28 +398,4 @@ class ConfigValidator:
         Returns:
             List of validation errors
         """
-        errors = []
-
-        if 'cpus' in resources:
-            if not isinstance(resources['cpus'], int) or resources['cpus'] < 1:
-                errors.append("CPUs must be a positive integer")
-
-        if 'memory' in resources:
-            memory = resources['memory']
-            if not isinstance(memory, str) or not any(
-                memory.endswith(unit) for unit in ['MB', 'GB', 'TB']
-            ):
-                errors.append("Memory must be a string with unit (MB, GB, or TB)")
-
-        if 'gpus' in resources:
-            if not isinstance(resources['gpus'], int) or resources['gpus'] < 0:
-                errors.append("GPUs must be a non-negative integer")
-
-        if 'time_limit' in resources:
-            time_limit = resources['time_limit']
-            if not isinstance(time_limit, str) or not any(
-                time_limit.endswith(unit) for unit in ['s', 'm', 'h', 'd']
-            ):
-                errors.append("Time limit must be a string with unit (s, m, h, or d)")
-
-        return errors
+        return ResourceController.validation_errors(resources)

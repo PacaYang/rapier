@@ -17,7 +17,9 @@ export const api = {
   catalog: () => request('/api/catalog'),
   validate: (graph) => postJson('/api/validate', graph),
   exportYaml: (graph) => postJson('/api/export', graph),
-  importYaml: (text) => request('/api/import', { method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: text }),
+  importYaml: (text, metaText) => metaText == null
+    ? request('/api/import', { method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: text })
+    : postJson('/api/import', { yaml: text, metadata_yaml: metaText }),
   examples: () => request('/api/examples'),
   example: (name) => request(`/api/examples/${encodeURIComponent(name)}`),
 };
